@@ -1,0 +1,12 @@
+{
+  "name": "win-record",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "https://github.com/JarvisChu/win-record.git",
+  "author": "JarvisChu <jarvischu@126.com>",
+  "license": "MIT",
+  "dependencies": {
+    "bindings": "^1.5.0",
+    "node-addon-api": "^3.1.0"
+  }
+}
