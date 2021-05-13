@@ -41,19 +41,14 @@ void OnClose(uv_handle_t* handle) {
 	delete m_async;
 }
 
-struct ThreadArg{
-	Record* r;
-	WaveSource ws;
-};
-
 void RunThreadI(void* arg) {
 	Record* record = (Record*) arg;
-	record->Run(Wave_Microphone);
+	record->Run(Wave_In);
 }
 
 void RunThreadO(void* arg) {
 	Record* record = (Record*) arg;
-	record->Run(Wave_Loopback);
+	record->Run(Wave_Out);
 }
 
 Nan::Persistent<Function> Record::constructor;
@@ -144,7 +139,7 @@ void Record::Run(WaveSource ws){
 	EXIT_ON_ERROR(hr);
 
 	EDataFlow device = eCapture;
-	if (ws == Wave_Loopback) {
+	if (ws == Wave_Out) {
 		device = eRender;
 	}
 	
@@ -161,60 +156,44 @@ void Record::Run(WaveSource ws){
 	EXIT_ON_ERROR(hr);
 
 	int nBlockAlign = 0;
-	if (true) {
-		// coerce int-XX wave format (like int-16 or int-32)
-		// can do this in-place since we're not changing the size of the format
-		// also, the engine will auto-convert from float to int for us
-		switch (pwfx->wFormatTag) {
-		case WAVE_FORMAT_IEEE_FLOAT:
-			assert(false);// we never get here...I never have anyway...my guess is windows vista+ by default just uses WAVE_FORMAT_EXTENSIBLE
-			pwfx->wFormatTag = WAVE_FORMAT_PCM;
+	// coerce int-XX wave format (like int-16 or int-32)
+	// can do this in-place since we're not changing the size of the format
+	// also, the engine will auto-convert from float to int for us
+	switch (pwfx->wFormatTag) {
+	case WAVE_FORMAT_EXTENSIBLE: // 65534
+	{
+		// naked scope for case-local variable
+		PWAVEFORMATEXTENSIBLE pEx = reinterpret_cast<PWAVEFORMATEXTENSIBLE>(pwfx);
+		if (IsEqualGUID(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, pEx->SubFormat)) {
+			// WE GET HERE!
+			pEx->SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+			// convert it to PCM, but let it keep as many bits of precision as it has initially...though it always seems to be 32
+			// comment this out and set wBitsPerSample to  pwfex->wBitsPerSample = getBitsPerSample(); to get an arguably "better" quality 32 bit pcm
+			// unfortunately flash media live encoder basically rejects 32 bit pcm, and it's not a huge gain sound quality-wise, so disabled for now.
 			pwfx->wBitsPerSample = 16;
+			pEx->Samples.wValidBitsPerSample = pwfx->wBitsPerSample;
 			pwfx->nBlockAlign = pwfx->nChannels * pwfx->wBitsPerSample / 8;
 			pwfx->nAvgBytesPerSec = pwfx->nBlockAlign * pwfx->nSamplesPerSec;
 			nBlockAlign = pwfx->nBlockAlign;
-			break;
-
-		case WAVE_FORMAT_EXTENSIBLE: // 65534
-		{
-			// naked scope for case-local variable
-			PWAVEFORMATEXTENSIBLE pEx = reinterpret_cast<PWAVEFORMATEXTENSIBLE>(pwfx);
-			if (IsEqualGUID(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, pEx->SubFormat)) {
-				// WE GET HERE!
-				pEx->SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
-				// convert it to PCM, but let it keep as many bits of precision as it has initially...though it always seems to be 32
-				// comment this out and set wBitsPerSample to  pwfex->wBitsPerSample = getBitsPerSample(); to get an arguably "better" quality 32 bit pcm
-				// unfortunately flash media live encoder basically rejects 32 bit pcm, and it's not a huge gain sound quality-wise, so disabled for now.
-				pwfx->wBitsPerSample = 16;
-				pEx->Samples.wValidBitsPerSample = pwfx->wBitsPerSample;
-				pwfx->nBlockAlign = pwfx->nChannels * pwfx->wBitsPerSample / 8;
-				pwfx->nAvgBytesPerSec = pwfx->nBlockAlign * pwfx->nSamplesPerSec;
-				nBlockAlign = pwfx->nBlockAlign;
 				// see also setupPwfex method
-			}
-			else {
-				//ShowOutput("Don't know how to coerce mix format to int-16\n");
-				CoTaskMemFree(pwfx);
-				pAudioClient->Release();
-				//return E_UNEXPECTED;
-				return;
-			}
 		}
-		break;
-
-		default:
+		else {
+			goto Exit;
+		}
+	}
+	break;
+	default:
 			//ShowOutput("Don't know how to coerce WAVEFORMATEX with wFormatTag = 0x%08x to int-16\n", pwfx->wFormatTag);
 			CoTaskMemFree(pwfx);
 			pAudioClient->Release();
 			return;
 			//return E_UNEXPECTED;
 		}
-	}
 		
 	EXIT_ON_ERROR(hr);
 
 	DWORD StreamFlags = 0;
-	if (ws == Wave_Loopback) {
+	if (ws == Wave_Out) {
 		StreamFlags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
 	}
 
@@ -267,9 +246,11 @@ void Record::Run(WaveSource ws){
 
 			// Copy the available capture data to the audio sink.
 			//hr = pMySink->CopyData(pData, nBlockAlign *numFramesAvailable, &bDone);
-			if(ws == Wave_Microphone){
+			if(ws == Wave_In){
+				m_ap_i.OnAudioData(pData, nBlockAlign *numFramesAvailable);
 				this->AddEvent(RecordEvent{EVT_LOCAL_AUDIO, std::to_string(nBlockAlign *numFramesAvailable) });
-			}else if(ws == Wave_Loopback){
+			}else if(ws == Wave_Out){
+				m_ap_o.OnAudioData(pData, nBlockAlign *numFramesAvailable);
 				this->AddEvent(RecordEvent{EVT_REMOTE_AUDIO, std::to_string(nBlockAlign *numFramesAvailable) });
 			}
 
@@ -295,7 +276,6 @@ void Record::Run(WaveSource ws){
 
 	this->AddEvent(RecordEvent{EVT_STOP, ""});
 }
-
 
 void Record::Stop() {
 	printf("[%ld]Record::Stop\n", GetCurrentThreadId());

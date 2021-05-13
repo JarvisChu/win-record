@@ -4,18 +4,13 @@
 #include <nan.h>
 #include <string>
 #include <vector>
+#include "audio_processor.h"
 
 using namespace v8;
 
 struct RecordEvent {
 	std::string type;
 	std::string value;
-};
-
-enum WaveSource
-{
-	Wave_Microphone = 1,
-	Wave_Loopback = 2
 };
 
 class Record : public Nan::ObjectWrap {
@@ -43,15 +38,18 @@ class Record : public Nan::ObjectWrap {
 		Nan::AsyncResource* m_async_resource;
 		uv_async_t* m_async;
 		volatile bool m_stopped;
-		uv_thread_t m_record_thread_i; // record input device audio
-		uv_thread_t m_record_thread_o; // record output device audio
+
+		uv_thread_t m_record_thread_i; // record input device audio. Wave_In
+		uv_thread_t m_record_thread_o; // record output device audio. Wave_Out
+		AudioProcessor m_ap_i;
+		AudioProcessor m_ap_o;
 
 		// record audio format and params
 		int m_audio_format;
 		int m_sample_rate;
 		int m_sample_bit;
 		int m_channel;
-		int m_bitrate; // effect only silk
+		int m_bitrate; // effect only silk	
 };
 
 #endif
