@@ -2,7 +2,7 @@
 #include "record.h"
 #include <chrono>
 #include <thread>
-#include <iostream>
+#include <Windows.h>
 
 using namespace std;
 
@@ -10,6 +10,7 @@ const char* EVT_START = "start";
 const char* EVT_STOP = "stop";
 const char* EVT_LOCAL_AUDIO = "localaudio";
 const char* EVT_REMOTE_AUDIO = "remoteaudio";
+const char* EVT_ERROR = "error";
 
 NAUV_WORK_CB(OnSend) {
 	Record* record = (Record*) async->data;
@@ -17,9 +18,9 @@ NAUV_WORK_CB(OnSend) {
 }
 
 void OnClose(uv_handle_t* handle) {
-	printf("onClose\n");
-	uv_async_t* async = (uv_async_t*) handle;
-	delete async;
+	printf("[%ld]OnClose\n", GetCurrentThreadId());
+	uv_async_t* m_async = (uv_async_t*) handle;
+	delete m_async;
 }
 
 void RunThread(void* arg) {
@@ -30,7 +31,7 @@ void RunThread(void* arg) {
 Nan::Persistent<Function> Record::constructor;
 
 Record::Record(Nan::Callback* callback, int audio_format, int sample_rate, int sample_bit, int channel) {
-	printf("Record::Record\n");
+	printf("[%ld]Record::Record\n", GetCurrentThreadId());
 
 	//check audio_format
 	if(audio_format != 1 && audio_format != 2){ // 1pcm,2silk
@@ -60,51 +61,35 @@ Record::Record(Nan::Callback* callback, int audio_format, int sample_rate, int s
 	printf("Record::Record audio_format:%d, sample_rate:%d, sample_bit:%d, channel:%d \n", 
 	m_audio_format, m_sample_rate, m_sample_bit, m_channel);
 
-	for (size_t i = 0; i < BUFFER_SIZE; i++) {
-		eventBuffer[i] = new RecordEvent();
-	}
+	m_event_callback = callback;
+	m_async_resource = new Nan::AsyncResource("win-record:Record");
+	m_stopped = false;
 
-	readIndex = 0;
-	writeIndex = 0;
+	uv_mutex_init(&m_lock_events);
 
-	event_callback = callback;
-	async_resource = new Nan::AsyncResource("win-record:Record");
-	stopped = false;
+	m_async = new uv_async_t;
+	m_async->data = this;
+	uv_async_init(uv_default_loop(), m_async, OnSend);
 
-	uv_mutex_init(&lock);
-	uv_mutex_init(&init_lock);
-	uv_cond_init(&init_cond);
-
-	async = new uv_async_t;
-	async->data = this;
-	uv_async_init(uv_default_loop(), async, OnSend);
-
-	uv_thread_create(&thread, RunThread, this);
+	uv_thread_create(&m_record_thread, RunThread, this);
 }
 
 
 Record::~Record() {
-	printf("Record::~Record\n");
+	printf("[%ld]Record::~Record\n", GetCurrentThreadId());
 	Stop();
 
-	uv_mutex_destroy(&init_lock);
-	uv_cond_destroy(&init_cond);
-
-	uv_mutex_destroy(&lock);
-	delete event_callback;
+	delete m_event_callback;
 
 	// HACK: Sometimes deleting async resource segfaults.
 	// Probably related to https://github.com/nodejs/nan/issues/772
 	if (!Nan::GetCurrentContext().IsEmpty()) {
-		delete async_resource;
-	}
-
-	for (size_t i = 0; i < BUFFER_SIZE; i++) {
-		delete eventBuffer[i];
+		delete m_async_resource;
 	}
 }
 
 void Record::Initialize(Local<Object> exports, Local<Value> module, Local<Context> context) {
+	printf("[%ld]Record::Initialize\n", GetCurrentThreadId());
 	Nan::HandleScope scope;
 
 	Local<FunctionTemplate> tpl = Nan::New<FunctionTemplate>(Record::New);
@@ -114,7 +99,6 @@ void Record::Initialize(Local<Object> exports, Local<Value> module, Local<Contex
 	Nan::SetPrototypeMethod(tpl, "destroy", Record::Destroy);
 	Nan::SetPrototypeMethod(tpl, "ref", Record::AddRef);
 	Nan::SetPrototypeMethod(tpl, "unref", Record::RemoveRef);
-	Nan::SetPrototypeMethod(tpl, "setparam", Record::SetParam);
 
 	Record::constructor.Reset(Nan::GetFunction(tpl).ToLocalChecked());
 	exports->Set(context,
@@ -124,13 +108,11 @@ void Record::Initialize(Local<Object> exports, Local<Value> module, Local<Contex
 
 void Record::Run()
 {
-	std::thread::id this_id = std::this_thread::get_id();
-	std::cout<<"Record::Run, threadid: "<<this_id<<std::endl; 
+	printf("[%ld]Record::Run\n", GetCurrentThreadId());
 
-    RecordEvent evtStart = { EVT_START, "" };
-	this->AddEvent(evtStart);
+	this->AddEvent( RecordEvent{EVT_START, ""} );
 
-	while(!stopped) {
+	while(!m_stopped) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
 	  RecordEvent evtData;
 	  evtData.type = EVT_LOCAL_AUDIO;
@@ -138,67 +120,49 @@ void Record::Run()
 	  this->AddEvent(evtData);
   	}
 
-	RecordEvent evtStop = { EVT_STOP, "" };
-	this->AddEvent(evtStop);
+	this->AddEvent(RecordEvent{EVT_STOP, ""});
 }
 
 
 void Record::Stop() {
-	std::thread::id this_id = std::this_thread::get_id();
-	std::cout<<"Record::Stop, threadid: "<<this_id<<std::endl; 
-	if (!stopped) {
-		uv_mutex_lock(&lock);
-		stopped = true;
-		uv_mutex_unlock(&lock);
+	printf("[%ld]Record::Stop\n", GetCurrentThreadId());
+	if (!m_stopped) {
+		m_stopped = true;
 	}
-	
 }
 
 void Record::AddEvent(const RecordEvent& evt){
-	printf("Record::AddEvent, type:%s\n", evt.type.c_str());
+	printf("[%ld]Record::AddEvent, type:%s\n", GetCurrentThreadId(), evt.type.c_str());
 	
-	uv_mutex_lock(&lock);
-	eventBuffer[writeIndex]->value = evt.value;
-	eventBuffer[writeIndex]->type = evt.type;
-	writeIndex = (writeIndex + 1) % BUFFER_SIZE;
-	uv_async_send(async);
-	uv_mutex_unlock(&lock);
+	uv_mutex_lock(&m_lock_events);
+	m_events.push_back(evt);
+	uv_async_send(m_async);
+	uv_mutex_unlock(&m_lock_events);
 }
 
 void Record::HandleSend() {
-	std::thread::id this_id = std::this_thread::get_id();
-	std::cout<<"Record::HandleSend, threadid: "<<this_id<<std::endl; 
-
+	printf("[%ld]Record::HandleSend\n", GetCurrentThreadId());
+	
 	Nan::HandleScope scope;
 
-	uv_mutex_lock(&lock);
-
-	while (readIndex != writeIndex /*&& !stopped*/) {
-		printf("Record::HandleSend2 readIndex:%d, writeIndex:%d, stopped:%d\n", readIndex, writeIndex, stopped);	
-		RecordEvent e = {
-			eventBuffer[readIndex]->type,
-			eventBuffer[readIndex]->value
-		};
-		readIndex = (readIndex + 1) % BUFFER_SIZE;
-
+	uv_mutex_lock(&m_lock_events); 
+	for(int i=0; i < m_events.size(); i ++){
 		Local<Value> argv[] = {
-			Nan::New<String>(e.type).ToLocalChecked(),
-			Nan::New<String>(e.value).ToLocalChecked()
+			Nan::New<String>(m_events[i].type).ToLocalChecked(),
+			Nan::New<String>(m_events[i].value).ToLocalChecked()
 		};
-
-		event_callback->Call(2, argv, async_resource);
+		m_event_callback->Call(2, argv, m_async_resource);
 	}
+	m_events.clear();
+	uv_mutex_unlock(&m_lock_events);
 
-	uv_mutex_unlock(&lock);
-
-	if(stopped) {
-		uv_close((uv_handle_t*) async, OnClose);
+	if(m_stopped) {
+		uv_close((uv_handle_t*) m_async, OnClose);
 	}
-
 }
 
 NAN_METHOD(Record::New) {
-	printf("Record::New\n");
+	printf("[%ld]Record::New\n", GetCurrentThreadId());
 	Nan::Callback* callback = new Nan::Callback(info[0].As<Function>());
 
 	v8::Local<v8::Context> context = info.GetIsolate()->GetCurrentContext();
@@ -212,8 +176,8 @@ NAN_METHOD(Record::New) {
 	info.GetReturnValue().Set(info.This());
 }
 
-NAN_METHOD(Record::Destroy) {
-	printf("Record::Destroy\n");
+NAN_METHOD(Record::Destroy) {	
+	printf("[%ld]Record::Destroy\n", GetCurrentThreadId());
 	Record* record = Nan::ObjectWrap::Unwrap<Record>(info.Holder());
 	record->Stop();
 
@@ -221,68 +185,17 @@ NAN_METHOD(Record::Destroy) {
 }
 
 NAN_METHOD(Record::AddRef) {
-	printf("Record::AddRef\n");
+	printf("[%ld]Record::AddRef\n", GetCurrentThreadId());
 	Record* record = ObjectWrap::Unwrap<Record>(info.Holder());
-	uv_ref((uv_handle_t*) record->async);
+	uv_ref((uv_handle_t*) record->m_async);
 
 	info.GetReturnValue().SetUndefined();
 }
 
 NAN_METHOD(Record::RemoveRef) {
-	printf("Record::RemoveRef\n");
+	printf("[%ld]Record::RemoveRef\n", GetCurrentThreadId());
 	Record* record = ObjectWrap::Unwrap<Record>(info.Holder());
-	uv_unref((uv_handle_t*) record->async);
+	uv_unref((uv_handle_t*) record->m_async);
 
 	info.GetReturnValue().SetUndefined();
-}
-
-NAN_METHOD(Record::SetParam) {
-	printf("SetParam");
-	Record* obj = ObjectWrap::Unwrap<Record>(info.Holder());
-	v8::Local<v8::Context> context = info.GetIsolate()->GetCurrentContext();
-
-	if (info.Length() < 4 || !info[0]->IsNumber() || !info[1]->IsNumber() || !info[2]->IsNumber() || !info[3]->IsNumber()) {
-		Nan::ThrowTypeError("invalid param");
-		return;
-	}
-
-	int m_audio_format = info[0]->NumberValue(context).FromJust();
-	int m_sample_rate = info[1]->NumberValue(context).FromJust();
-	int m_sample_bit = info[2]->NumberValue(context).FromJust();
-	int m_channel = info[3]->NumberValue(context).FromJust();
-
-	//check audio_format
-	if(m_audio_format != 1 && m_audio_format != 2){ // 1pcm,2silk
-		Nan::ThrowError("unsupported audio format, only support pcm/silk currently");
-		//Napi::Error::New(env, "unsupported audio format, only support pcm/silk currently").ThrowAsJavaScriptException();
-	}
-
-	//check sample_rate
-	if(m_sample_rate != 8000 && m_sample_rate != 16000 && m_sample_rate != 24000 && 
-		m_sample_rate != 32000 && m_sample_rate != 44100 && m_sample_rate != 48000){
-		//Napi::Error::New(env, "invalid sample rate").ThrowAsJavaScriptException();
-		Nan::ThrowError("invalid sample rate");
-	}
-
-	// check sample_bit
-	if(m_sample_bit != 8 && m_sample_bit != 16 && m_sample_bit != 24 && m_sample_bit != 32){
-		//Napi::Error::New(env, "invalid sample bit").ThrowAsJavaScriptException();
-		Nan::ThrowError("invalid sample bit");
-	}
-
-	// check channel
-	if(m_channel != 1 && m_channel != 2){
-		//Napi::Error::New(env, "invalid channel number").ThrowAsJavaScriptException();
-		Nan::ThrowError("invalid channel number");
-	}
-
-	printf("Record::SetParam audio_format:%d, sample_rate:%d, sample_bit:%d, channel:%d \n", 
-	m_audio_format, m_sample_rate, m_sample_bit, m_channel);
-
-	obj->m_audio_format = m_audio_format;
-	obj->m_sample_rate = m_sample_rate;
-	obj->m_sample_bit = m_sample_bit;
-	obj->m_channel = m_channel;
-
-	info.GetReturnValue().Set(true);
 }
