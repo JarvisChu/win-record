@@ -12,6 +12,7 @@ npm install win-record
 # Build
 
 ```
+export NODE_PATH=$(npm root -g)
 node-gyp configure
 node-gyp build
 ```
@@ -19,40 +20,26 @@ node-gyp build
 # Project Detail
 
 ```
-# 1. install yarn
 sudo npm install -g yarn
-
-# 2. install gyp
 yarn global add node-gyp 
 
-# 3. init project (will generate package.json)
-cd win-record
-yarn init -y # 
+cd win-record && yarn init -y # # init project (will generate package.json)
 
-# 4. install node-addon-api
-yarn add node-addon-api
-# or npm i bindings node-addon-api -S # install bingdings and node-addon-api
+npm i -g nan
+export NODE_PATH=$(npm root -g)
 
-# 5. manual create binding.gyp
+# manual create binding.gyp, index.js, src/*
 
-# 6. manual create src/*
-
-# 7. configure
 node-gyp configure
-
-# 8. build
-node-gyp build
-#node-gyp build --debug
-
-# 9. rebuild
+node-gyp build #node-gyp build --debug
 node-gyp rebuild
-
-# 10. publish
 npm publish
-
-
 ```
 
 # References
 > https://juejin.cn/post/6844903971220357134
+>
 > https://juejin.cn/post/6844904030162911240
+>
+> github.com/kapetan/win-mouse
+

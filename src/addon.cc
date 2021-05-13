@@ -1,8 +1,5 @@
-#include <napi.h>
-#include "record.h"
+﻿#include "record.h"
 
-Napi::Object InitAll(Napi::Env env, Napi::Object exports) {
-    return Record::Init(env, exports);
+NODE_MODULE_INIT() {
+	Record::Initialize(exports, module, context);
 }
-
-NODE_API_MODULE(NODE_GYP_MODULE_NAME, InitAll)
