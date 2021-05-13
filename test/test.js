@@ -1,7 +1,6 @@
 var record = require('../')
 
 var r = record()
-var r1 = record()
 
 r.on('start', function () {
   console.log('start')

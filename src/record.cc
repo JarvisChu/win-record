@@ -3,14 +3,32 @@
 #include <chrono>
 #include <thread>
 #include <Windows.h>
+#include <audioclient.h>
+#include <mmdeviceapi.h>
 
 using namespace std;
+
+#pragma comment(lib, "winmm.lib")
 
 const char* EVT_START = "start";
 const char* EVT_STOP = "stop";
 const char* EVT_LOCAL_AUDIO = "localaudio";
 const char* EVT_REMOTE_AUDIO = "remoteaudio";
 const char* EVT_ERROR = "error";
+
+
+// REFERENCE_TIME time units per second and per millisecond
+#define REFTIMES_PER_SEC  10000000
+#define REFTIMES_PER_MILLISEC  10000
+
+#define EXIT_ON_ERROR(hres) { if (FAILED(hres)) { goto Exit; } }     
+#define SAFE_RELEASE(punk) { if ((punk) != NULL) { (punk)->Release(); (punk) = NULL; } }
+                
+const CLSID CLSID_MMDeviceEnumerator = __uuidof(MMDeviceEnumerator);
+const IID IID_IMMDeviceEnumerator = __uuidof(IMMDeviceEnumerator);
+const IID IID_IAudioClient = __uuidof(IAudioClient);
+const IID IID_IAudioCaptureClient = __uuidof(IAudioCaptureClient);
+
 
 NAUV_WORK_CB(OnSend) {
 	Record* record = (Record*) async->data;
@@ -23,9 +41,19 @@ void OnClose(uv_handle_t* handle) {
 	delete m_async;
 }
 
-void RunThread(void* arg) {
+struct ThreadArg{
+	Record* r;
+	WaveSource ws;
+};
+
+void RunThreadI(void* arg) {
 	Record* record = (Record*) arg;
-	record->Run();
+	record->Run(Wave_Microphone);
+}
+
+void RunThreadO(void* arg) {
+	Record* record = (Record*) arg;
+	record->Run(Wave_Loopback);
 }
 
 Nan::Persistent<Function> Record::constructor;
@@ -71,9 +99,9 @@ Record::Record(Nan::Callback* callback, int audio_format, int sample_rate, int s
 	m_async->data = this;
 	uv_async_init(uv_default_loop(), m_async, OnSend);
 
-	uv_thread_create(&m_record_thread, RunThread, this);
+	uv_thread_create(&m_record_thread_i, RunThreadI, this);
+	uv_thread_create(&m_record_thread_o, RunThreadO, this);
 }
-
 
 Record::~Record() {
 	printf("[%ld]Record::~Record\n", GetCurrentThreadId());
@@ -106,19 +134,164 @@ void Record::Initialize(Local<Object> exports, Local<Value> module, Local<Contex
 		Nan::GetFunction(tpl).ToLocalChecked());
 }
 
-void Record::Run()
-{
-	printf("[%ld]Record::Run\n", GetCurrentThreadId());
-
+void Record::Run(WaveSource ws){
+	printf("[%ld]Record::Run, ws:%d\n", GetCurrentThreadId(), ws);
 	this->AddEvent( RecordEvent{EVT_START, ""} );
 
-	while(!m_stopped) {
-      std::this_thread::sleep_for(std::chrono::seconds(1));
-	  RecordEvent evtData;
-	  evtData.type = EVT_LOCAL_AUDIO;
-	  evtData.value = "data001";
-	  this->AddEvent(evtData);
-  	}
+	CoInitializeEx(NULL, 0);
+	IMMDeviceEnumerator *pEnumerator = NULL;
+	HRESULT hr = CoCreateInstance(CLSID_MMDeviceEnumerator, NULL,CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&pEnumerator);
+	EXIT_ON_ERROR(hr);
+
+	EDataFlow device = eCapture;
+	if (ws == Wave_Loopback) {
+		device = eRender;
+	}
+	
+	IMMDevice *pDevice = NULL;
+	hr = pEnumerator->GetDefaultAudioEndpoint(device, eConsole, &pDevice);
+	EXIT_ON_ERROR(hr);
+
+	IAudioClient *pAudioClient = NULL;
+	hr = pDevice->Activate(IID_IAudioClient, CLSCTX_ALL, NULL, (void**)&pAudioClient);
+	EXIT_ON_ERROR(hr);
+
+	WAVEFORMATEX *pwfx = NULL;
+	hr = pAudioClient->GetMixFormat(&pwfx);
+	EXIT_ON_ERROR(hr);
+
+	int nBlockAlign = 0;
+	if (true) {
+		// coerce int-XX wave format (like int-16 or int-32)
+		// can do this in-place since we're not changing the size of the format
+		// also, the engine will auto-convert from float to int for us
+		switch (pwfx->wFormatTag) {
+		case WAVE_FORMAT_IEEE_FLOAT:
+			assert(false);// we never get here...I never have anyway...my guess is windows vista+ by default just uses WAVE_FORMAT_EXTENSIBLE
+			pwfx->wFormatTag = WAVE_FORMAT_PCM;
+			pwfx->wBitsPerSample = 16;
+			pwfx->nBlockAlign = pwfx->nChannels * pwfx->wBitsPerSample / 8;
+			pwfx->nAvgBytesPerSec = pwfx->nBlockAlign * pwfx->nSamplesPerSec;
+			nBlockAlign = pwfx->nBlockAlign;
+			break;
+
+		case WAVE_FORMAT_EXTENSIBLE: // 65534
+		{
+			// naked scope for case-local variable
+			PWAVEFORMATEXTENSIBLE pEx = reinterpret_cast<PWAVEFORMATEXTENSIBLE>(pwfx);
+			if (IsEqualGUID(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, pEx->SubFormat)) {
+				// WE GET HERE!
+				pEx->SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+				// convert it to PCM, but let it keep as many bits of precision as it has initially...though it always seems to be 32
+				// comment this out and set wBitsPerSample to  pwfex->wBitsPerSample = getBitsPerSample(); to get an arguably "better" quality 32 bit pcm
+				// unfortunately flash media live encoder basically rejects 32 bit pcm, and it's not a huge gain sound quality-wise, so disabled for now.
+				pwfx->wBitsPerSample = 16;
+				pEx->Samples.wValidBitsPerSample = pwfx->wBitsPerSample;
+				pwfx->nBlockAlign = pwfx->nChannels * pwfx->wBitsPerSample / 8;
+				pwfx->nAvgBytesPerSec = pwfx->nBlockAlign * pwfx->nSamplesPerSec;
+				nBlockAlign = pwfx->nBlockAlign;
+				// see also setupPwfex method
+			}
+			else {
+				//ShowOutput("Don't know how to coerce mix format to int-16\n");
+				CoTaskMemFree(pwfx);
+				pAudioClient->Release();
+				//return E_UNEXPECTED;
+				return;
+			}
+		}
+		break;
+
+		default:
+			//ShowOutput("Don't know how to coerce WAVEFORMATEX with wFormatTag = 0x%08x to int-16\n", pwfx->wFormatTag);
+			CoTaskMemFree(pwfx);
+			pAudioClient->Release();
+			return;
+			//return E_UNEXPECTED;
+		}
+	}
+		
+	EXIT_ON_ERROR(hr);
+
+	DWORD StreamFlags = 0;
+	if (ws == Wave_Loopback) {
+		StreamFlags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
+	}
+
+	REFERENCE_TIME hnsRequestedDuration = REFTIMES_PER_SEC;
+	hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,StreamFlags,hnsRequestedDuration,0,pwfx,NULL);
+	EXIT_ON_ERROR(hr);
+
+	// Get the size of the allocated buffer.
+	UINT32 bufferFrameCount;
+	hr = pAudioClient->GetBufferSize(&bufferFrameCount);
+	EXIT_ON_ERROR(hr);
+
+	IAudioCaptureClient *pCaptureClient = NULL;
+	hr = pAudioClient->GetService(IID_IAudioCaptureClient,(void**)&pCaptureClient);
+	EXIT_ON_ERROR(hr);
+
+	// Notify the audio sink which format to use.
+	//hr = pMySink->SetFormat(pwfx);
+	//EXIT_ON_ERROR(hr)
+
+	// Calculate the actual duration of the allocated buffer.
+	REFERENCE_TIME hnsActualDuration = (double)REFTIMES_PER_SEC * bufferFrameCount / pwfx->nSamplesPerSec;
+
+	hr = pAudioClient->Start();  // Start recording.
+	EXIT_ON_ERROR(hr);
+
+	// Each loop fills about half of the shared buffer.
+	while (!m_stopped)
+	{
+		// Sleep for half the buffer duration.
+		Sleep(hnsActualDuration / REFTIMES_PER_MILLISEC / 2);
+
+		UINT32 packetLength = 0;
+		hr = pCaptureClient->GetNextPacketSize(&packetLength);
+		EXIT_ON_ERROR(hr);
+
+		while (!m_stopped && packetLength != 0)
+		{
+			// Get the available data in the shared buffer.
+			BYTE *pData;
+			DWORD flags;
+			UINT32 numFramesAvailable;
+			hr = pCaptureClient->GetBuffer(&pData,&numFramesAvailable,&flags, NULL, NULL);
+			EXIT_ON_ERROR(hr);
+
+			if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
+			{
+				pData = NULL;  // Tell CopyData to write silence.
+			}
+
+			// Copy the available capture data to the audio sink.
+			//hr = pMySink->CopyData(pData, nBlockAlign *numFramesAvailable, &bDone);
+			if(ws == Wave_Microphone){
+				this->AddEvent(RecordEvent{EVT_LOCAL_AUDIO, std::to_string(nBlockAlign *numFramesAvailable) });
+			}else if(ws == Wave_Loopback){
+				this->AddEvent(RecordEvent{EVT_REMOTE_AUDIO, std::to_string(nBlockAlign *numFramesAvailable) });
+			}
+
+			EXIT_ON_ERROR(hr);
+
+			hr = pCaptureClient->ReleaseBuffer(numFramesAvailable);
+			EXIT_ON_ERROR(hr);
+
+			hr = pCaptureClient->GetNextPacketSize(&packetLength);
+			EXIT_ON_ERROR(hr);
+		}
+	}
+
+	hr = pAudioClient->Stop();  // Stop recording.
+	EXIT_ON_ERROR(hr);
+
+	Exit:
+	CoTaskMemFree(pwfx);
+	SAFE_RELEASE(pEnumerator)
+	SAFE_RELEASE(pDevice)
+	SAFE_RELEASE(pAudioClient)
+	SAFE_RELEASE(pCaptureClient)
 
 	this->AddEvent(RecordEvent{EVT_STOP, ""});
 }
@@ -133,7 +306,6 @@ void Record::Stop() {
 
 void Record::AddEvent(const RecordEvent& evt){
 	printf("[%ld]Record::AddEvent, type:%s\n", GetCurrentThreadId(), evt.type.c_str());
-	
 	uv_mutex_lock(&m_lock_events);
 	m_events.push_back(evt);
 	uv_async_send(m_async);
@@ -141,8 +313,7 @@ void Record::AddEvent(const RecordEvent& evt){
 }
 
 void Record::HandleSend() {
-	printf("[%ld]Record::HandleSend\n", GetCurrentThreadId());
-	
+	printf("[%ld]Record::HandleSend\n", GetCurrentThreadId());	
 	Nan::HandleScope scope;
 
 	uv_mutex_lock(&m_lock_events); 

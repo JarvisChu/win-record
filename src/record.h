@@ -12,6 +12,12 @@ struct RecordEvent {
 	std::string value;
 };
 
+enum WaveSource
+{
+	Wave_Microphone = 1,
+	Wave_Loopback = 2
+};
+
 class Record : public Nan::ObjectWrap {
 	public:
 		static void Initialize(Local<Object> exports, Local<Value> module, Local<Context> context);
@@ -20,7 +26,7 @@ class Record : public Nan::ObjectWrap {
 		void Stop();
 		void AddEvent(const RecordEvent&);
 		void HandleSend();
-		void Run();
+		void Run(WaveSource ws);
 
 	private:
 		explicit Record(Nan::Callback*, int, int, int, int);
@@ -37,7 +43,8 @@ class Record : public Nan::ObjectWrap {
 		Nan::AsyncResource* m_async_resource;
 		uv_async_t* m_async;
 		volatile bool m_stopped;
-		uv_thread_t m_record_thread;
+		uv_thread_t m_record_thread_i; // record input device audio
+		uv_thread_t m_record_thread_o; // record output device audio
 
 		// record audio format and params
 		int m_audio_format;
