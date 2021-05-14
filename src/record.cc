@@ -10,10 +10,12 @@ using namespace std;
 
 #pragma comment(lib, "winmm.lib")
 
-const char* EVT_START = "start";
-const char* EVT_STOP = "stop";
-const char* EVT_LOCAL_AUDIO = "localaudio";
-const char* EVT_REMOTE_AUDIO = "remoteaudio";
+const char* EVT_IN_START = "in_start";
+const char* EVT_OUT_START = "out_start";
+const char* EVT_IN_STOP = "in_stop";
+const char* EVT_OUT_STOP = "out_stop";
+const char* EVT_IN_AUDIO = "in_audio";
+const char* EVT_OUT_AUDIO = "out_audio";
 const char* EVT_ERROR = "error";
 
 
@@ -53,36 +55,49 @@ void RunThreadO(void* arg) {
 
 Nan::Persistent<Function> Record::constructor;
 
-Record::Record(Nan::Callback* callback, int audio_format, int sample_rate, int sample_bit, int channel) {
+Record::Record( Nan::NAN_METHOD_ARGS_TYPE info) {
 	printf("[%ld]Record::Record\n", GetCurrentThreadId());
 
+	Nan::Callback* callback = new Nan::Callback(info[0].As<Function>());
+	m_audio_format = std::string(*Nan::Utf8String(info[1].As<String>()));
+
+	v8::Local<v8::Context> context = info.GetIsolate()->GetCurrentContext();
+  	m_sample_rate = info[2]->NumberValue(context).FromJust();
+  	m_sample_bit = info[3]->NumberValue(context).FromJust();
+  	m_channel = info[4]->NumberValue(context).FromJust();
+	
+	m_record_flag = RF_BOTH_IO;
+	if(info.Length() == 6 && info[5]->IsString()) {
+		std::string flag(*Nan::Utf8String(info[5].As<String>()));
+		if(flag == "only_input") {
+			m_record_flag = RF_ONLY_INPUT;
+		}else if(flag == "only_output") {
+			m_record_flag = RF_ONLY_OUTPUT;
+		}
+	}
+
 	//check audio_format
-	if(audio_format != 1 && audio_format != 2){ // 1pcm,2silk
-		Nan::ThrowError("unsupported audio format, only support 1:pcm/2:silk currently");
+	if(m_audio_format != "pcm" && m_audio_format != "silk"){ //
+		Nan::ThrowError("unsupported audio format, only support pcm/silk currently");
 	}
 
 	//check sample_rate
-	if(sample_rate != 8000 && sample_rate != 16000 && sample_rate != 24000 && 
-		sample_rate != 32000 && sample_rate != 44100 && sample_rate != 48000){
+	if(m_sample_rate != 8000 && m_sample_rate != 16000 && m_sample_rate != 24000 && 
+		m_sample_rate != 32000 && m_sample_rate != 44100 && m_sample_rate != 48000){
 		Nan::ThrowError("invalid sample rate");
 	}
 
 	// check sample_bit
-	if(sample_bit != 8 && sample_bit != 16 && sample_bit != 24 && sample_bit != 32){
+	if(m_sample_bit != 8 && m_sample_bit != 16 && m_sample_bit != 24 && m_sample_bit != 32){
 		Nan::ThrowError("invalid sample bit");
 	}
 
 	// check channel
-	if(channel != 1 && channel != 2){
+	if(m_channel != 1 && m_channel != 2){
 		Nan::ThrowError("invalid channel number");
 	}
 
-	m_audio_format = audio_format;
-	m_sample_rate = sample_rate;
-	m_sample_bit = sample_bit;
-	m_channel = channel;
-	printf("Record::Record audio_format:%d, sample_rate:%d, sample_bit:%d, channel:%d \n", 
-	m_audio_format, m_sample_rate, m_sample_bit, m_channel);
+	printf("Record::Record audio_format:%s, sample_rate:%d, sample_bit:%d, channel:%d \n", m_audio_format.c_str(), m_sample_rate, m_sample_bit, m_channel);
 
 	m_event_callback = callback;
 	m_async_resource = new Nan::AsyncResource("win-record:Record");
@@ -94,8 +109,13 @@ Record::Record(Nan::Callback* callback, int audio_format, int sample_rate, int s
 	m_async->data = this;
 	uv_async_init(uv_default_loop(), m_async, OnSend);
 
-	uv_thread_create(&m_record_thread_i, RunThreadI, this);
-	uv_thread_create(&m_record_thread_o, RunThreadO, this);
+	if(m_record_flag != RF_ONLY_OUTPUT){
+		uv_thread_create(&m_record_thread_i, RunThreadI, this);
+	}
+
+	if(m_record_flag != RF_ONLY_INPUT){
+		uv_thread_create(&m_record_thread_o, RunThreadO, this);
+	}
 }
 
 Record::~Record() {
@@ -131,7 +151,12 @@ void Record::Initialize(Local<Object> exports, Local<Value> module, Local<Contex
 
 void Record::Run(WaveSource ws){
 	printf("[%ld]Record::Run, ws:%d\n", GetCurrentThreadId(), ws);
-	this->AddEvent( RecordEvent{EVT_START, ""} );
+
+	if(ws == Wave_In) {
+		this->AddEvent( RecordEvent{EVT_IN_START, ""} );
+	}else{
+		this->AddEvent( RecordEvent{EVT_OUT_START, ""} );
+	}
 
 	CoInitializeEx(NULL, 0);
 	IMMDeviceEnumerator *pEnumerator = NULL;
@@ -248,10 +273,10 @@ void Record::Run(WaveSource ws){
 			//hr = pMySink->CopyData(pData, nBlockAlign *numFramesAvailable, &bDone);
 			if(ws == Wave_In){
 				m_ap_i.OnAudioData(pData, nBlockAlign *numFramesAvailable);
-				this->AddEvent(RecordEvent{EVT_LOCAL_AUDIO, std::to_string(nBlockAlign *numFramesAvailable) });
+				this->AddEvent(RecordEvent{EVT_IN_AUDIO, std::to_string(nBlockAlign *numFramesAvailable) });
 			}else if(ws == Wave_Out){
 				m_ap_o.OnAudioData(pData, nBlockAlign *numFramesAvailable);
-				this->AddEvent(RecordEvent{EVT_REMOTE_AUDIO, std::to_string(nBlockAlign *numFramesAvailable) });
+				this->AddEvent(RecordEvent{EVT_OUT_AUDIO, std::to_string(nBlockAlign *numFramesAvailable) });
 			}
 
 			EXIT_ON_ERROR(hr);
@@ -274,7 +299,11 @@ void Record::Run(WaveSource ws){
 	SAFE_RELEASE(pAudioClient)
 	SAFE_RELEASE(pCaptureClient)
 
-	this->AddEvent(RecordEvent{EVT_STOP, ""});
+	if(ws == Wave_In) {
+		this->AddEvent( RecordEvent{EVT_IN_STOP, ""} );
+	}else{
+		this->AddEvent( RecordEvent{EVT_IN_STOP, ""} );
+	}
 }
 
 void Record::Stop() {
@@ -314,14 +343,7 @@ void Record::HandleSend() {
 
 NAN_METHOD(Record::New) {
 	printf("[%ld]Record::New\n", GetCurrentThreadId());
-	Nan::Callback* callback = new Nan::Callback(info[0].As<Function>());
-
-	v8::Local<v8::Context> context = info.GetIsolate()->GetCurrentContext();
-  	int audio_format = info[1]->NumberValue(context).FromJust();
-  	int sample_rate = info[2]->NumberValue(context).FromJust();
-  	int sample_bit = info[3]->NumberValue(context).FromJust();
-  	int channel = info[4]->NumberValue(context).FromJust();
-	Record* record = new Record(callback, audio_format, sample_rate, sample_bit, channel);
+	Record* record = new Record(info);
 	record->Wrap(info.This());
 
 	info.GetReturnValue().Set(info.This());

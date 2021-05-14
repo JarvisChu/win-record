@@ -21,14 +21,14 @@ module.exports = function () {
     record = null
   }
 
-  that.start = function(audio_format, sample_rate, sample_bit, channel) {
+  that.start = function(...props) {
     console.info("start")
     if(record == null){
       record = new Record(function (type, x) {
         if(type == 'start') that.emit(type);
         else if(type == 'stop') that.emit(type);
         else that.emit(type, x);
-      }, audio_format, sample_rate, sample_bit, channel)
+      }, ...props)
     }
   }
 

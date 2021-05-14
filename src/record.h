@@ -13,6 +13,12 @@ struct RecordEvent {
 	std::string value;
 };
 
+enum RecordFlag {
+	RF_BOTH_IO = 0,
+	RF_ONLY_INPUT = 1,
+	RF_ONLY_OUTPUT = 2,
+};
+
 class Record : public Nan::ObjectWrap {
 	public:
 		static void Initialize(Local<Object> exports, Local<Value> module, Local<Context> context);
@@ -24,7 +30,7 @@ class Record : public Nan::ObjectWrap {
 		void Run(WaveSource ws);
 
 	private:
-		explicit Record(Nan::Callback*, int, int, int, int);
+		explicit Record(Nan::NAN_METHOD_ARGS_TYPE info);
 		~Record();
 
 		static NAN_METHOD(New);
@@ -39,13 +45,15 @@ class Record : public Nan::ObjectWrap {
 		uv_async_t* m_async;
 		volatile bool m_stopped;
 
-		uv_thread_t m_record_thread_i; // record input device audio. Wave_In
-		uv_thread_t m_record_thread_o; // record output device audio. Wave_Out
+		uv_thread_t m_record_thread_i; // recording input device audio. Wave_In
+		uv_thread_t m_record_thread_o; // recording output device audio. Wave_Out
 		AudioProcessor m_ap_i;
 		AudioProcessor m_ap_o;
 
+		RecordFlag m_record_flag; // 0 recording both io audio; 1 recording input audio only; 2 recording output audio only
+
 		// record audio format and params
-		int m_audio_format;
+		std::string m_audio_format;
 		int m_sample_rate;
 		int m_sample_bit;
 		int m_channel;
