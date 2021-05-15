@@ -14,7 +14,7 @@ npm install win-record
 Please refer to `test/test.js`
 
 ```javascript
-var record = require('../')
+var record = require('win-record')
 
 var r = record()
 
@@ -68,7 +68,7 @@ node-gyp build
 ```
 
 # References
-> - github.com/kapetan/win-mouse
+> - https://github.com/kapetan/win-mouse
 > - https://github.com/ploverlake/silk
 > - https://community.risingstack.com/using-buffers-node-js-c-plus-plus/
 
