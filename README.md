@@ -68,7 +68,7 @@ node-gyp build
 ```
 
 # References
-> github.com/kapetan/win-mouse
-> https://github.com/ploverlake/silk
-> https://community.risingstack.com/using-buffers-node-js-c-plus-plus/
+> - github.com/kapetan/win-mouse
+> - https://github.com/ploverlake/silk
+> - https://community.risingstack.com/using-buffers-node-js-c-plus-plus/
 
