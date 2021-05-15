@@ -4,6 +4,7 @@
 #include <vector>
 #include <nan.h>
 #include <Windows.h>
+#include "silk_encoder.h"
 
 enum WaveSource
 {
@@ -25,12 +26,14 @@ public:
 	void GetAudioData(std::vector<BYTE> &bufferOut);
 
 private:
+	CSilkEncoder m_silk_encoder;
+
 	uv_mutex_t m_lock_pcm;
 	uv_mutex_t m_lock_silk;
 
 	std::vector<BYTE> m_pcm;
 	std::vector<BYTE> m_silk;
-	unsigned int m_offset;	
+	unsigned int m_offset;
 
 	UINT m_org_sample_rate;
 	UINT m_org_sample_bits;

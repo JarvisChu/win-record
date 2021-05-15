@@ -4,6 +4,7 @@
 AudioProcessor::AudioProcessor(){
 	m_offset = 0;
 
+    // default settings
 	m_org_sample_rate = 48000;
 	m_org_sample_bits = 16;
 	m_org_channel = 2;
@@ -45,7 +46,6 @@ void AudioProcessor::OnAudioData(BYTE *pData, size_t size){
 			offset += m_seg_instan;
 		}
 		m_offset = offset - size;
-		//m_buffer.insert(m_buffer.end(), pData, pData + size);
 	}else {
 		size_t insterCount = size / m_seg_instan;
 		m_pcm.insert(m_pcm.end(), insterCount * m_tgt_channel * m_tgt_sample_bits / 8, 0);
@@ -54,15 +54,15 @@ void AudioProcessor::OnAudioData(BYTE *pData, size_t size){
 	size_t pcmBufferCount = m_pcm.size();
 
 	//encode silk
-	/*if (m_silkEncoder){
-		// silk 编码每次20ms，所以循环从m_buffer中取20ms的音频进行编码
-		int nBytesPer20ms = targetSample * targetChannel * targetBit / 8 / 50; // 20ms的数据量
-		while ((int)m_buffer.size() > nBytesPer20ms) {
-			m_silkEncoder->Encode(m_targetAudioFormatConfig.sampleRate, 20, m_buffer, m_silkBuffer, m_targetAudioFormatConfig.bitRate);
-			if (m_bNeedSaveFile) m_waveFile.Write(m_buffer, nBytesPer20ms); // save pcm
-			m_buffer.erase(m_buffer.begin(), m_buffer.begin() + nBytesPer20ms);
+	if ( m_tgt_audio_format == AF_SILK){
+		// silk encode 20ms pcm  audio data each time; looping to get 20ms from m_pcm
+		int nBytesPer20ms = m_tgt_sample_rate * m_tgt_sample_bits * m_tgt_channel / 8 / 50; // bytes count of 20ms pcm audio data 
+		while ((int)m_pcm.size() > nBytesPer20ms) {
+			m_silk_encoder.Encode(m_tgt_sample_rate, 20, m_pcm, m_silk);
+			//if (m_bNeedSaveFile) m_waveFile.Write(m_buffer, nBytesPer20ms); // save pcm
+			m_pcm.erase(m_pcm.begin(), m_pcm.begin() + nBytesPer20ms);
 		}
-	}*/
+	}
 
 	uv_mutex_unlock(&m_lock_pcm);
 
@@ -71,14 +71,14 @@ void AudioProcessor::OnAudioData(BYTE *pData, size_t size){
 
 void AudioProcessor::GetAudioData(std::vector<BYTE> &bufferOut){
 	uv_mutex_lock(&m_lock_pcm);
-	//if (m_silkEncoder) {
-	//	if (m_bNeedSaveFile) m_silkFile.Write(m_silkBuffer, m_silkBuffer.size());
-	//	bufferOut.swap(m_silkBuffer);
-	//	m_silkBuffer.clear();
-	//}else {
+	if (m_tgt_audio_format == AF_SILK) {
+		//	if (m_bNeedSaveFile) m_silkFile.Write(m_silkBuffer, m_silkBuffer.size());
+		bufferOut.swap(m_silk);
+		m_silk.clear();
+	}else {
 		//if (m_bNeedSaveFile) m_waveFile.Write(m_buffer, m_buffer.size());
 		bufferOut.swap(m_pcm);
 		m_pcm.clear();
-	//}
+	}
 	uv_mutex_unlock(&m_lock_pcm);
 }
