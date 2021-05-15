@@ -11,6 +11,8 @@ npm install win-record
 
 # Example
 
+Please refer to `test/test.js`
+
 ```javascript
 var record = require('../')
 

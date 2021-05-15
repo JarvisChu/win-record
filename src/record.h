@@ -49,15 +49,6 @@ class Record : public Nan::ObjectWrap {
 		uv_thread_t m_record_thread_o; // recording output device audio. Wave_Out
 		AudioProcessor m_ap_i;
 		AudioProcessor m_ap_o;
-
-		RecordFlag m_record_flag; // 0 recording both io audio; 1 recording input audio only; 2 recording output audio only
-
-		// record audio format and params
-		std::string m_audio_format;
-		int m_sample_rate;
-		int m_sample_bit;
-		int m_channel;
-		int m_bitrate; // effect only silk	
 };
 
 #endif

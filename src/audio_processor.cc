@@ -8,9 +8,10 @@ AudioProcessor::AudioProcessor(){
 	m_org_sample_bits = 16;
 	m_org_channel = 2;
 
+	m_tgt_audio_format = AF_PCM;
 	m_tgt_sample_rate = 8000;
-	m_tgt_sample_bits = 1;
-	m_tgt_channel = 16;
+	m_tgt_sample_bits = 16;
+	m_tgt_channel = 1;
 
 	m_seg_instan = m_org_sample_rate * m_org_channel * m_org_sample_bits / 8 / m_tgt_sample_rate; // 除数放后，增加精度，用于降采样
 
@@ -20,9 +21,21 @@ AudioProcessor::AudioProcessor(){
 
 AudioProcessor::~AudioProcessor(){}
 
+
+void AudioProcessor::SetAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel)
+{
+	m_tgt_audio_format = audio_format;
+	m_tgt_sample_rate = sample_rate;
+	m_tgt_sample_bits = sample_bits;
+	m_tgt_channel = channel;
+
+	// update m_seg_instan
+	m_seg_instan = m_org_sample_rate * m_org_channel * m_org_sample_bits / 8 / m_tgt_sample_rate; // 除数放后，增加精度，用于降采样
+}
+
 void AudioProcessor::OnAudioData(BYTE *pData, size_t size){
 
-	// 缩小采样率	
+	// downsampling
 	UINT offset = m_offset;
 	uv_mutex_lock(&m_lock_pcm);
 	
@@ -54,4 +67,18 @@ void AudioProcessor::OnAudioData(BYTE *pData, size_t size){
 	uv_mutex_unlock(&m_lock_pcm);
 
 	return;
+}
+
+void AudioProcessor::GetAudioData(std::vector<BYTE> &bufferOut){
+	uv_mutex_lock(&m_lock_pcm);
+	//if (m_silkEncoder) {
+	//	if (m_bNeedSaveFile) m_silkFile.Write(m_silkBuffer, m_silkBuffer.size());
+	//	bufferOut.swap(m_silkBuffer);
+	//	m_silkBuffer.clear();
+	//}else {
+		//if (m_bNeedSaveFile) m_waveFile.Write(m_buffer, m_buffer.size());
+		bufferOut.swap(m_pcm);
+		m_pcm.clear();
+	//}
+	uv_mutex_unlock(&m_lock_pcm);
 }

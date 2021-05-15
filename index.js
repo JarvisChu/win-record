@@ -25,9 +25,7 @@ module.exports = function () {
     console.info("start")
     if(record == null){
       record = new Record(function (type, x) {
-        if(type == 'start') that.emit(type);
-        else if(type == 'stop') that.emit(type);
-        else that.emit(type, x);
+        that.emit(type, x);
       }, ...props)
     }
   }

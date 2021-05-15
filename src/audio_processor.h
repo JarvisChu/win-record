@@ -11,11 +11,18 @@ enum WaveSource
 	Wave_Out = 2 // output audio, speeker loopback
 };
 
+enum AudioFormat{
+	AF_PCM = 0,
+	AF_SILK = 1
+};
+
 class AudioProcessor{
 public:
 	AudioProcessor();
 	~AudioProcessor();
+	void SetAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel);
 	void OnAudioData(BYTE *pData, size_t size);
+	void GetAudioData(std::vector<BYTE> &bufferOut);
 
 private:
 	uv_mutex_t m_lock_pcm;
@@ -29,6 +36,7 @@ private:
 	UINT m_org_sample_bits;
 	UINT m_org_channel;
 
+	AudioFormat m_tgt_audio_format;
 	UINT m_tgt_sample_rate;
 	UINT m_tgt_sample_bits;
 	UINT m_tgt_channel;

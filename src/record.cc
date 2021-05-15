@@ -58,46 +58,49 @@ Nan::Persistent<Function> Record::constructor;
 Record::Record( Nan::NAN_METHOD_ARGS_TYPE info) {
 	printf("[%ld]Record::Record\n", GetCurrentThreadId());
 
-	Nan::Callback* callback = new Nan::Callback(info[0].As<Function>());
-	m_audio_format = std::string(*Nan::Utf8String(info[1].As<String>()));
-
 	v8::Local<v8::Context> context = info.GetIsolate()->GetCurrentContext();
-  	m_sample_rate = info[2]->NumberValue(context).FromJust();
-  	m_sample_bit = info[3]->NumberValue(context).FromJust();
-  	m_channel = info[4]->NumberValue(context).FromJust();
-	
-	m_record_flag = RF_BOTH_IO;
+	Nan::Callback* callback = new Nan::Callback(info[0].As<Function>());
+	std::string str_audio_format(*Nan::Utf8String(info[1].As<String>()));
+  	int sample_rate = info[2]->NumberValue(context).FromJust();
+  	int sample_bits = info[3]->NumberValue(context).FromJust();
+  	int channel = info[4]->NumberValue(context).FromJust();	
+	RecordFlag record_flag = RF_BOTH_IO;// 0 recording both io audio; 1 recording input audio only; 2 recording output audio only
 	if(info.Length() == 6 && info[5]->IsString()) {
 		std::string flag(*Nan::Utf8String(info[5].As<String>()));
 		if(flag == "only_input") {
-			m_record_flag = RF_ONLY_INPUT;
+			record_flag = RF_ONLY_INPUT;
 		}else if(flag == "only_output") {
-			m_record_flag = RF_ONLY_OUTPUT;
+			record_flag = RF_ONLY_OUTPUT;
 		}
 	}
 
 	//check audio_format
-	if(m_audio_format != "pcm" && m_audio_format != "silk"){ //
+	AudioFormat audio_format;
+	if(str_audio_format == "pcm") {
+		audio_format = AF_PCM;
+	}else if(str_audio_format == "silk") {
+		audio_format = AF_SILK;
+	}else{
 		Nan::ThrowError("unsupported audio format, only support pcm/silk currently");
 	}
 
 	//check sample_rate
-	if(m_sample_rate != 8000 && m_sample_rate != 16000 && m_sample_rate != 24000 && 
-		m_sample_rate != 32000 && m_sample_rate != 44100 && m_sample_rate != 48000){
-		Nan::ThrowError("invalid sample rate");
+	if(sample_rate != 8000 && sample_rate != 16000 && sample_rate != 24000 && 
+		sample_rate != 32000 && sample_rate != 44100 && sample_rate != 48000){
+		Nan::ThrowError("invalid sample rate, only support 8000/16000/24000/32000/44100/48000");
 	}
 
 	// check sample_bit
-	if(m_sample_bit != 8 && m_sample_bit != 16 && m_sample_bit != 24 && m_sample_bit != 32){
-		Nan::ThrowError("invalid sample bit");
+	if(sample_bits != 8 && sample_bits != 16 && sample_bits != 24 && sample_bits != 32){
+		Nan::ThrowError("invalid sample bit, only support 8/16/24/32");
 	}
 
 	// check channel
-	if(m_channel != 1 && m_channel != 2){
-		Nan::ThrowError("invalid channel number");
+	if(channel != 1 && channel != 2){
+		Nan::ThrowError("invalid channel number, only support 1/2");
 	}
 
-	printf("Record::Record audio_format:%s, sample_rate:%d, sample_bit:%d, channel:%d \n", m_audio_format.c_str(), m_sample_rate, m_sample_bit, m_channel);
+	printf("Record::Record audio_format:%s, sample_rate:%d, sample_bit:%d, channel:%d \n", str_audio_format.c_str(), sample_rate, sample_bits, channel);
 
 	m_event_callback = callback;
 	m_async_resource = new Nan::AsyncResource("win-record:Record");
@@ -109,11 +112,13 @@ Record::Record( Nan::NAN_METHOD_ARGS_TYPE info) {
 	m_async->data = this;
 	uv_async_init(uv_default_loop(), m_async, OnSend);
 
-	if(m_record_flag != RF_ONLY_OUTPUT){
+	if(record_flag != RF_ONLY_OUTPUT){
+		m_ap_i.SetAudioParam(audio_format, sample_rate, sample_bits, channel);
 		uv_thread_create(&m_record_thread_i, RunThreadI, this);
 	}
 
-	if(m_record_flag != RF_ONLY_INPUT){
+	if(record_flag != RF_ONLY_INPUT){
+		m_ap_o.SetAudioParam(audio_format, sample_rate, sample_bits, channel);
 		uv_thread_create(&m_record_thread_o, RunThreadO, this);
 	}
 }
@@ -208,12 +213,12 @@ void Record::Run(WaveSource ws){
 	}
 	break;
 	default:
-			//ShowOutput("Don't know how to coerce WAVEFORMATEX with wFormatTag = 0x%08x to int-16\n", pwfx->wFormatTag);
-			CoTaskMemFree(pwfx);
-			pAudioClient->Release();
-			return;
-			//return E_UNEXPECTED;
-		}
+		//ShowOutput("Don't know how to coerce WAVEFORMATEX with wFormatTag = 0x%08x to int-16\n", pwfx->wFormatTag);
+		CoTaskMemFree(pwfx);
+		pAudioClient->Release();
+		return;
+		//return E_UNEXPECTED;
+	}
 		
 	EXIT_ON_ERROR(hr);
 
@@ -270,13 +275,12 @@ void Record::Run(WaveSource ws){
 			}
 
 			// Copy the available capture data to the audio sink.
-			//hr = pMySink->CopyData(pData, nBlockAlign *numFramesAvailable, &bDone);
 			if(ws == Wave_In){
 				m_ap_i.OnAudioData(pData, nBlockAlign *numFramesAvailable);
-				this->AddEvent(RecordEvent{EVT_IN_AUDIO, std::to_string(nBlockAlign *numFramesAvailable) });
+				this->AddEvent(RecordEvent{EVT_IN_AUDIO,"" });
 			}else if(ws == Wave_Out){
 				m_ap_o.OnAudioData(pData, nBlockAlign *numFramesAvailable);
-				this->AddEvent(RecordEvent{EVT_OUT_AUDIO, std::to_string(nBlockAlign *numFramesAvailable) });
+				this->AddEvent(RecordEvent{EVT_OUT_AUDIO, ""});
 			}
 
 			EXIT_ON_ERROR(hr);
@@ -321,18 +325,58 @@ void Record::AddEvent(const RecordEvent& evt){
 	uv_mutex_unlock(&m_lock_events);
 }
 
+void buffer_delete_callback(char* data, void* the_vector) {
+  delete reinterpret_cast<vector<unsigned char> *> (the_vector);
+}
+
 void Record::HandleSend() {
 	printf("[%ld]Record::HandleSend\n", GetCurrentThreadId());	
 	Nan::HandleScope scope;
 
+	bool bInSended = false;
+	bool bOutSended = false;
 	uv_mutex_lock(&m_lock_events); 
 	for(int i=0; i < m_events.size(); i ++){
-		Local<Value> argv[] = {
-			Nan::New<String>(m_events[i].type).ToLocalChecked(),
-			Nan::New<String>(m_events[i].value).ToLocalChecked()
-		};
-		m_event_callback->Call(2, argv, m_async_resource);
+
+		if(m_events[i].type == EVT_IN_AUDIO){
+			if( bInSended ) continue; // merge same events, trigger only once
+			bInSended = true;
+			
+			std::vector<BYTE> audio_data;
+			m_ap_i.GetAudioData(audio_data);
+			if(audio_data.size() == 0 ) continue;
+
+			Local<Value> argv[] = {
+				Nan::New<String>(m_events[i].type).ToLocalChecked(),
+				Nan::CopyBuffer((char*)audio_data.data(), audio_data.size() ).ToLocalChecked()
+			};
+			m_event_callback->Call(2, argv, m_async_resource);
+		}
+		
+		else if (m_events[i].type == EVT_OUT_AUDIO){
+			if( bOutSended ) continue; // merge same events, trigger only once
+			bOutSended = true;
+
+			std::vector<BYTE> audio_data;
+			m_ap_o.GetAudioData(audio_data);
+			if(audio_data.size() == 0 ) continue;
+
+			Local<Value> argv[] = {
+				Nan::New<String>(m_events[i].type).ToLocalChecked(),
+				Nan::CopyBuffer((char*)audio_data.data(), audio_data.size() ).ToLocalChecked()
+			};
+			m_event_callback->Call(2, argv, m_async_resource);
+		}
+
+		else{
+			Local<Value> argv[] = {
+				Nan::New<String>(m_events[i].type).ToLocalChecked(),
+				Nan::New<String>(m_events[i].value).ToLocalChecked()
+			};
+			m_event_callback->Call(2, argv, m_async_resource);
+		}
 	}
+
 	m_events.clear();
 	uv_mutex_unlock(&m_lock_events);
 
