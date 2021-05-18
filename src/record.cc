@@ -40,7 +40,10 @@ NAUV_WORK_CB(OnSend) {
 void OnClose(uv_handle_t* handle) {
 	printf("[%ld]OnClose\n", GetCurrentThreadId());
 	uv_async_t* m_async = (uv_async_t*) handle;
-	delete m_async;
+	if(m_async) {
+		delete m_async;
+		m_async = nullptr;
+	}
 }
 
 void RunThreadI(void* arg) {
@@ -104,6 +107,7 @@ Record::Record( Nan::NAN_METHOD_ARGS_TYPE info) {
 
 	m_event_callback = callback;
 	m_async_resource = new Nan::AsyncResource("win-record:Record");
+	m_uv_closed = false;
 	m_need_stop = false;
 	m_thread_i_running = false;
 	m_thread_o_running = false;
@@ -380,7 +384,10 @@ void Record::HandleSend() {
 	}
 
 	if(m_need_stop && !m_thread_i_running && !m_thread_i_running) {
-		uv_close((uv_handle_t*) m_async, OnClose);
+		if(!m_uv_closed){
+			m_uv_closed = true;
+			uv_close((uv_handle_t*) m_async, OnClose);
+		}
 	}
 }
 

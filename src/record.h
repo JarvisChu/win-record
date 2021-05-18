@@ -43,7 +43,8 @@ class Record : public Nan::ObjectWrap {
 		Nan::Callback* m_event_callback;
 		Nan::AsyncResource* m_async_resource;
 		uv_async_t* m_async;
-
+		
+		volatile bool m_uv_closed;
 		volatile bool m_need_stop;
 		volatile bool m_thread_i_running;
 		volatile bool m_thread_o_running;
