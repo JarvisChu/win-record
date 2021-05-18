@@ -104,7 +104,9 @@ Record::Record( Nan::NAN_METHOD_ARGS_TYPE info) {
 
 	m_event_callback = callback;
 	m_async_resource = new Nan::AsyncResource("win-record:Record");
-	m_stopped = false;
+	m_need_stop = false;
+	m_thread_i_running = false;
+	m_thread_o_running = false;
 
 	uv_mutex_init(&m_lock_events);
 
@@ -158,8 +160,10 @@ void Record::Run(WaveSource ws){
 	printf("[%ld]Record::Run, ws:%d\n", GetCurrentThreadId(), ws);
 
 	if(ws == Wave_In) {
+		m_thread_i_running = true;
 		this->AddEvent( RecordEvent{EVT_IN_START, ""} );
 	}else{
+		m_thread_i_running = true;
 		this->AddEvent( RecordEvent{EVT_OUT_START, ""} );
 	}
 
@@ -205,7 +209,7 @@ void Record::Run(WaveSource ws){
 			pwfx->nBlockAlign = pwfx->nChannels * pwfx->wBitsPerSample / 8;
 			pwfx->nAvgBytesPerSec = pwfx->nBlockAlign * pwfx->nSamplesPerSec;
 			nBlockAlign = pwfx->nBlockAlign;
-				// see also setupPwfex method
+			// see also setupPwfex method
 		}
 		else {
 			goto Exit;
@@ -214,13 +218,8 @@ void Record::Run(WaveSource ws){
 	break;
 	default:
 		//ShowOutput("Don't know how to coerce WAVEFORMATEX with wFormatTag = 0x%08x to int-16\n", pwfx->wFormatTag);
-		CoTaskMemFree(pwfx);
-		pAudioClient->Release();
-		return;
-		//return E_UNEXPECTED;
+		goto Exit;
 	}
-		
-	EXIT_ON_ERROR(hr);
 
 	DWORD StreamFlags = 0;
 	if (ws == Wave_Out) {
@@ -251,7 +250,7 @@ void Record::Run(WaveSource ws){
 	EXIT_ON_ERROR(hr);
 
 	// Each loop fills about half of the shared buffer.
-	while (!m_stopped)
+	while (!m_need_stop)
 	{
 		// Sleep for half the buffer duration.
 		Sleep(hnsActualDuration / REFTIMES_PER_MILLISEC / 2);
@@ -260,7 +259,7 @@ void Record::Run(WaveSource ws){
 		hr = pCaptureClient->GetNextPacketSize(&packetLength);
 		EXIT_ON_ERROR(hr);
 
-		while (!m_stopped && packetLength != 0)
+		while (!m_need_stop && packetLength != 0)
 		{
 			// Get the available data in the shared buffer.
 			BYTE *pData;
@@ -269,8 +268,7 @@ void Record::Run(WaveSource ws){
 			hr = pCaptureClient->GetBuffer(&pData,&numFramesAvailable,&flags, NULL, NULL);
 			EXIT_ON_ERROR(hr);
 
-			if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
-			{
+			if (flags & AUDCLNT_BUFFERFLAGS_SILENT){
 				pData = NULL;  // Tell CopyData to write silence.
 			}
 
@@ -302,18 +300,21 @@ void Record::Run(WaveSource ws){
 	SAFE_RELEASE(pDevice)
 	SAFE_RELEASE(pAudioClient)
 	SAFE_RELEASE(pCaptureClient)
+	CoUninitialize();
 
 	if(ws == Wave_In) {
+		m_thread_i_running = false;
 		this->AddEvent( RecordEvent{EVT_IN_STOP, ""} );
 	}else{
-		this->AddEvent( RecordEvent{EVT_IN_STOP, ""} );
+		m_thread_o_running = false;
+		this->AddEvent( RecordEvent{EVT_OUT_STOP, ""} );
 	}
 }
 
 void Record::Stop() {
 	printf("[%ld]Record::Stop\n", GetCurrentThreadId());
-	if (!m_stopped) {
-		m_stopped = true;
+	if (!m_need_stop) {
+		m_need_stop = true;
 	}
 }
 
@@ -325,20 +326,21 @@ void Record::AddEvent(const RecordEvent& evt){
 	uv_mutex_unlock(&m_lock_events);
 }
 
-void buffer_delete_callback(char* data, void* the_vector) {
-  delete reinterpret_cast<vector<unsigned char> *> (the_vector);
-}
-
 void Record::HandleSend() {
 	printf("[%ld]Record::HandleSend\n", GetCurrentThreadId());	
 	Nan::HandleScope scope;
 
+	std::vector<RecordEvent> events;
+	uv_mutex_lock(&m_lock_events);
+	events.swap(m_events);
+	m_events.clear();
+	uv_mutex_unlock(&m_lock_events);
+
 	bool bInSended = false;
 	bool bOutSended = false;
-	uv_mutex_lock(&m_lock_events); 
-	for(int i=0; i < m_events.size(); i ++){
+	for(int i=0; i < events.size(); i ++){
 
-		if(m_events[i].type == EVT_IN_AUDIO){
+		if(events[i].type == EVT_IN_AUDIO){
 			if( bInSended ) continue; // merge same events, trigger only once
 			bInSended = true;
 			
@@ -347,13 +349,13 @@ void Record::HandleSend() {
 			if(audio_data.size() == 0 ) continue;
 
 			Local<Value> argv[] = {
-				Nan::New<String>(m_events[i].type).ToLocalChecked(),
+				Nan::New<String>(events[i].type).ToLocalChecked(),
 				Nan::CopyBuffer((char*)audio_data.data(), audio_data.size() ).ToLocalChecked()
 			};
 			m_event_callback->Call(2, argv, m_async_resource);
 		}
 		
-		else if (m_events[i].type == EVT_OUT_AUDIO){
+		else if (events[i].type == EVT_OUT_AUDIO){
 			if( bOutSended ) continue; // merge same events, trigger only once
 			bOutSended = true;
 
@@ -362,7 +364,7 @@ void Record::HandleSend() {
 			if(audio_data.size() == 0 ) continue;
 
 			Local<Value> argv[] = {
-				Nan::New<String>(m_events[i].type).ToLocalChecked(),
+				Nan::New<String>(events[i].type).ToLocalChecked(),
 				Nan::CopyBuffer((char*)audio_data.data(), audio_data.size() ).ToLocalChecked()
 			};
 			m_event_callback->Call(2, argv, m_async_resource);
@@ -370,17 +372,14 @@ void Record::HandleSend() {
 
 		else{
 			Local<Value> argv[] = {
-				Nan::New<String>(m_events[i].type).ToLocalChecked(),
-				Nan::New<String>(m_events[i].value).ToLocalChecked()
+				Nan::New<String>(events[i].type).ToLocalChecked(),
+				Nan::New<String>(events[i].value).ToLocalChecked()
 			};
 			m_event_callback->Call(2, argv, m_async_resource);
 		}
 	}
 
-	m_events.clear();
-	uv_mutex_unlock(&m_lock_events);
-
-	if(m_stopped) {
+	if(m_need_stop && !m_thread_i_running && !m_thread_i_running) {
 		uv_close((uv_handle_t*) m_async, OnClose);
 	}
 }
