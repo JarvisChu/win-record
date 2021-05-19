@@ -113,6 +113,7 @@ Record::Record( Nan::NAN_METHOD_ARGS_TYPE info) {
 	m_thread_o_running = false;
 
 	uv_mutex_init(&m_lock_events);
+	uv_mutex_init(&m_lock_uv_close);
 
 	m_async = new uv_async_t;
 	m_async->data = this;
@@ -384,10 +385,12 @@ void Record::HandleSend() {
 	}
 
 	if(m_need_stop && !m_thread_i_running && !m_thread_i_running) {
+		uv_mutex_lock(&m_lock_uv_close);
 		if(!m_uv_closed){
 			m_uv_closed = true;
 			uv_close((uv_handle_t*) m_async, OnClose);
 		}
+		uv_mutex_unlock(&m_lock_uv_close);
 	}
 }
 
