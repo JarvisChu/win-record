@@ -35,15 +35,12 @@ class Record : public Nan::ObjectWrap {
 
 		static NAN_METHOD(New);
 		static NAN_METHOD(Destroy);
-		static NAN_METHOD(AddRef);
-		static NAN_METHOD(RemoveRef);
 
 		uv_mutex_t m_lock_events;
 		std::vector<RecordEvent> m_events;
 		Nan::Callback* m_event_callback;
 		Nan::AsyncResource* m_async_resource;
 		uv_async_t* m_async;
-		uv_mutex_t m_lock_uv_close;
 		
 		volatile bool m_uv_closed;
 		volatile bool m_need_stop;

@@ -113,7 +113,6 @@ Record::Record( Nan::NAN_METHOD_ARGS_TYPE info) {
 	m_thread_o_running = false;
 
 	uv_mutex_init(&m_lock_events);
-	uv_mutex_init(&m_lock_uv_close);
 
 	m_async = new uv_async_t;
 	m_async->data = this;
@@ -152,8 +151,6 @@ void Record::Initialize(Local<Object> exports, Local<Value> module, Local<Contex
 	tpl->InstanceTemplate()->SetInternalFieldCount(1);
 
 	Nan::SetPrototypeMethod(tpl, "destroy", Record::Destroy);
-	Nan::SetPrototypeMethod(tpl, "ref", Record::AddRef);
-	Nan::SetPrototypeMethod(tpl, "unref", Record::RemoveRef);
 
 	Record::constructor.Reset(Nan::GetFunction(tpl).ToLocalChecked());
 	exports->Set(context,
@@ -165,10 +162,8 @@ void Record::Run(WaveSource ws){
 	printf("[%ld]Record::Run, ws:%d\n", GetCurrentThreadId(), ws);
 
 	if(ws == Wave_In) {
-		m_thread_i_running = true;
 		this->AddEvent( RecordEvent{EVT_IN_START, ""} );
 	}else{
-		m_thread_i_running = true;
 		this->AddEvent( RecordEvent{EVT_OUT_START, ""} );
 	}
 
@@ -308,10 +303,8 @@ void Record::Run(WaveSource ws){
 	CoUninitialize();
 
 	if(ws == Wave_In) {
-		m_thread_i_running = false;
 		this->AddEvent( RecordEvent{EVT_IN_STOP, ""} );
 	}else{
-		m_thread_o_running = false;
 		this->AddEvent( RecordEvent{EVT_OUT_STOP, ""} );
 	}
 }
@@ -375,6 +368,22 @@ void Record::HandleSend() {
 			m_event_callback->Call(2, argv, m_async_resource);
 		}
 
+		else if (events[i].type == EVT_IN_START){
+			m_thread_i_running = true;
+		}
+
+		else if (events[i].type == EVT_OUT_START){
+			m_thread_o_running = true;
+		}
+
+		else if (events[i].type == EVT_IN_STOP){
+			m_thread_i_running = false;
+		}
+
+		else if (events[i].type == EVT_OUT_STOP){
+			m_thread_o_running = false;
+		}
+
 		else{
 			Local<Value> argv[] = {
 				Nan::New<String>(events[i].type).ToLocalChecked(),
@@ -384,13 +393,8 @@ void Record::HandleSend() {
 		}
 	}
 
-	if(m_need_stop && !m_thread_i_running && !m_thread_i_running) {
-		uv_mutex_lock(&m_lock_uv_close);
-		if(!m_uv_closed){
-			m_uv_closed = true;
-			uv_close((uv_handle_t*) m_async, OnClose);
-		}
-		uv_mutex_unlock(&m_lock_uv_close);
+	if(m_need_stop && !m_thread_i_running && !m_thread_o_running) {
+		uv_close((uv_handle_t*) m_async, OnClose);
 	}
 }
 
@@ -406,22 +410,6 @@ NAN_METHOD(Record::Destroy) {
 	printf("[%ld]Record::Destroy\n", GetCurrentThreadId());
 	Record* record = Nan::ObjectWrap::Unwrap<Record>(info.Holder());
 	record->Stop();
-
-	info.GetReturnValue().SetUndefined();
-}
-
-NAN_METHOD(Record::AddRef) {
-	printf("[%ld]Record::AddRef\n", GetCurrentThreadId());
-	Record* record = ObjectWrap::Unwrap<Record>(info.Holder());
-	uv_ref((uv_handle_t*) record->m_async);
-
-	info.GetReturnValue().SetUndefined();
-}
-
-NAN_METHOD(Record::RemoveRef) {
-	printf("[%ld]Record::RemoveRef\n", GetCurrentThreadId());
-	Record* record = ObjectWrap::Unwrap<Record>(info.Holder());
-	uv_unref((uv_handle_t*) record->m_async);
 
 	info.GetReturnValue().SetUndefined();
 }
