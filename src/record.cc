@@ -368,23 +368,19 @@ void Record::HandleSend() {
 			m_event_callback->Call(2, argv, m_async_resource);
 		}
 
-		else if (events[i].type == EVT_IN_START){
-			m_thread_i_running = true;
-		}
-
-		else if (events[i].type == EVT_OUT_START){
-			m_thread_o_running = true;
-		}
-
-		else if (events[i].type == EVT_IN_STOP){
-			m_thread_i_running = false;
-		}
-
-		else if (events[i].type == EVT_OUT_STOP){
-			m_thread_o_running = false;
-		}
-
 		else{
+
+			// update flag
+			if (events[i].type == EVT_IN_START){
+				m_thread_i_running = true;
+			}else if (events[i].type == EVT_OUT_START){
+				m_thread_o_running = true;
+			}else if (events[i].type == EVT_IN_STOP){
+				m_thread_i_running = false;
+			}else if (events[i].type == EVT_OUT_STOP){
+				m_thread_o_running = false;
+			}
+
 			Local<Value> argv[] = {
 				Nan::New<String>(events[i].type).ToLocalChecked(),
 				Nan::New<String>(events[i].value).ToLocalChecked()
