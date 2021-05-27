@@ -31,8 +31,9 @@ const IID IID_IMMDeviceEnumerator = __uuidof(IMMDeviceEnumerator);
 const IID IID_IAudioClient = __uuidof(IAudioClient);
 const IID IID_IAudioCaptureClient = __uuidof(IAudioCaptureClient);
 
+Napi::FunctionReference Record::constructor;
 
-NAUV_WORK_CB(OnSend) {
+void OnSend(uv_async_t *async){
 	Record* record = (Record*) async->data;
 	record->HandleSend();
 }
@@ -56,20 +57,30 @@ void RunThreadO(void* arg) {
 	record->Run(Wave_Out);
 }
 
-Nan::Persistent<Function> Record::constructor;
+Record::Record(const Napi::CallbackInfo& info): Napi::ObjectWrap<Record>(info) {
+	Napi::Env env = info.Env();
 
-Record::Record( Nan::NAN_METHOD_ARGS_TYPE info) {
 	printf("[%ld]Record::Record\n", GetCurrentThreadId());
 
-	v8::Local<v8::Context> context = info.GetIsolate()->GetCurrentContext();
-	Nan::Callback* callback = new Nan::Callback(info[0].As<Function>());
-	std::string str_audio_format(*Nan::Utf8String(info[1].As<String>()));
-  	int sample_rate = info[2]->NumberValue(context).FromJust();
-  	int sample_bits = info[3]->NumberValue(context).FromJust();
-  	int channel = info[4]->NumberValue(context).FromJust();	
+	if(info.Length() < 5 ){
+		Napi::TypeError::New(env, "Wrong number of arguments").ThrowAsJavaScriptException();
+		return;
+	}
+
+	if(!info[1].IsString() || !info[2].IsNumber() || !info[3].IsNumber() || !info[4].IsNumber()){
+		Napi::TypeError::New(env, "invalid type of arguments").ThrowAsJavaScriptException();
+		return;
+	}
+
+	Napi::Function callback = info[0].As<Napi::Function>();
+	std::string str_audio_format = (std::string) info[1].ToString();
+  	int sample_rate = info[2].As<Napi::Number>().Int32Value();
+  	int sample_bits = info[3].As<Napi::Number>().Int32Value();
+  	int channel = info[4].As<Napi::Number>().Int32Value();
+
 	RecordFlag record_flag = RF_BOTH_IO;// 0 recording both io audio; 1 recording input audio only; 2 recording output audio only
-	if(info.Length() == 6 && info[5]->IsString()) {
-		std::string flag(*Nan::Utf8String(info[5].As<String>()));
+	if(info.Length() == 6 && info[5].IsString()) {
+		std::string flag = (std::string) info[5].ToString();
 		if(flag == "only_input") {
 			record_flag = RF_ONLY_INPUT;
 		}else if(flag == "only_output") {
@@ -84,29 +95,34 @@ Record::Record( Nan::NAN_METHOD_ARGS_TYPE info) {
 	}else if(str_audio_format == "silk") {
 		audio_format = AF_SILK;
 	}else{
-		Nan::ThrowError("unsupported audio format, only support pcm/silk currently");
+		Napi::TypeError::New(env, "unsupported audio format, only support pcm/silk currently").ThrowAsJavaScriptException();
+		return;
 	}
 
 	//check sample_rate
 	if(sample_rate != 8000 && sample_rate != 16000 && sample_rate != 24000 && 
 		sample_rate != 32000 && sample_rate != 44100 && sample_rate != 48000){
-		Nan::ThrowError("invalid sample rate, only support 8000/16000/24000/32000/44100/48000");
+		Napi::TypeError::New(env, "invalid sample rate, only support 8000/16000/24000/32000/44100/48000").ThrowAsJavaScriptException();
+		return;
 	}
 
 	// check sample_bit
 	if(sample_bits != 8 && sample_bits != 16 && sample_bits != 24 && sample_bits != 32){
-		Nan::ThrowError("invalid sample bit, only support 8/16/24/32");
+		Napi::TypeError::New(env, "invalid sample bit, only support 8/16/24/32").ThrowAsJavaScriptException();
+		return;
 	}
 
 	// check channel
 	if(channel != 1 && channel != 2){
-		Nan::ThrowError("invalid channel number, only support 1/2");
+		Napi::TypeError::New(env, "invalid channel number, only support 1/2").ThrowAsJavaScriptException();
+		return;
 	}
 
 	printf("Record::Record audio_format:%s, sample_rate:%d, sample_bit:%d, channel:%d \n", str_audio_format.c_str(), sample_rate, sample_bits, channel);
 
-	m_event_callback = callback;
-	m_async_resource = new Nan::AsyncResource("win-record:Record");
+	m_env = callback.Env();
+    m_callback = Napi::Persistent(callback);
+
 	m_uv_closed = false;
 	m_need_stop = false;
 	m_thread_i_running = false;
@@ -126,36 +142,29 @@ Record::Record( Nan::NAN_METHOD_ARGS_TYPE info) {
 	if(record_flag != RF_ONLY_INPUT){
 		m_ap_o.SetAudioParam(audio_format, sample_rate, sample_bits, channel);
 		uv_thread_create(&m_record_thread_o, RunThreadO, this);
-	}
+	}  
 }
 
 Record::~Record() {
 	printf("[%ld]Record::~Record\n", GetCurrentThreadId());
 	Stop();
-
-	delete m_event_callback;
-
-	// HACK: Sometimes deleting async resource segfaults.
-	// Probably related to https://github.com/nodejs/nan/issues/772
-	if (!Nan::GetCurrentContext().IsEmpty()) {
-		delete m_async_resource;
-	}
 }
 
-void Record::Initialize(Local<Object> exports, Local<Value> module, Local<Context> context) {
-	printf("[%ld]Record::Initialize\n", GetCurrentThreadId());
-	Nan::HandleScope scope;
+Napi::Object Record::Init(Napi::Env env, Napi::Object exports) {
+	printf("[%ld]Record::Init\n", GetCurrentThreadId());
+	Napi::Function func = DefineClass(env, "Record", {
+		InstanceMethod("destroy", &Record::Destroy)
+	});
 
-	Local<FunctionTemplate> tpl = Nan::New<FunctionTemplate>(Record::New);
-	tpl->SetClassName(Nan::New<String>("Record").ToLocalChecked());
-	tpl->InstanceTemplate()->SetInternalFieldCount(1);
+	constructor = Napi::Persistent(func);
+	constructor.SuppressDestruct();
+	exports.Set("Record", func);
+	return exports;
+}
 
-	Nan::SetPrototypeMethod(tpl, "destroy", Record::Destroy);
-
-	Record::constructor.Reset(Nan::GetFunction(tpl).ToLocalChecked());
-	exports->Set(context,
-		Nan::New("Record").ToLocalChecked(),
-		Nan::GetFunction(tpl).ToLocalChecked());
+void Record::Destroy(const Napi::CallbackInfo& info){
+	printf("[%ld]Record::Destroy\n", GetCurrentThreadId());
+	Stop();
 }
 
 void Record::Run(WaveSource ws){
@@ -326,7 +335,7 @@ void Record::AddEvent(const RecordEvent& evt){
 
 void Record::HandleSend() {
 	printf("[%ld]Record::HandleSend\n", GetCurrentThreadId());	
-	Nan::HandleScope scope;
+	Napi::HandleScope scope(m_env);
 
 	std::vector<RecordEvent> events;
 	uv_mutex_lock(&m_lock_events);
@@ -346,11 +355,10 @@ void Record::HandleSend() {
 			m_ap_i.GetAudioData(audio_data);
 			if(audio_data.size() == 0 ) continue;
 
-			Local<Value> argv[] = {
-				Nan::New<String>(events[i].type).ToLocalChecked(),
-				Nan::CopyBuffer((char*)audio_data.data(), audio_data.size() ).ToLocalChecked()
-			};
-			m_event_callback->Call(2, argv, m_async_resource);
+			m_callback.Call({
+				Napi::String::New(m_env, events[i].type), 
+				Napi::Buffer<BYTE>::Copy(m_env, audio_data.data(), audio_data.size())
+			});
 		}
 		
 		else if (events[i].type == EVT_OUT_AUDIO){
@@ -361,15 +369,13 @@ void Record::HandleSend() {
 			m_ap_o.GetAudioData(audio_data);
 			if(audio_data.size() == 0 ) continue;
 
-			Local<Value> argv[] = {
-				Nan::New<String>(events[i].type).ToLocalChecked(),
-				Nan::CopyBuffer((char*)audio_data.data(), audio_data.size() ).ToLocalChecked()
-			};
-			m_event_callback->Call(2, argv, m_async_resource);
+			m_callback.Call({
+				Napi::String::New(m_env, events[i].type), 
+				Napi::Buffer<BYTE>::Copy(m_env, audio_data.data(), audio_data.size())
+			});
 		}
 
 		else{
-
 			// update flag
 			if (events[i].type == EVT_IN_START){
 				m_thread_i_running = true;
@@ -381,31 +387,14 @@ void Record::HandleSend() {
 				m_thread_o_running = false;
 			}
 
-			Local<Value> argv[] = {
-				Nan::New<String>(events[i].type).ToLocalChecked(),
-				Nan::New<String>(events[i].value).ToLocalChecked()
-			};
-			m_event_callback->Call(2, argv, m_async_resource);
+			m_callback.Call({
+				Napi::String::New(m_env, events[i].type), 
+				Napi::String::New(m_env, events[i].value)
+			});
 		}
 	}
 
 	if(m_need_stop && !m_thread_i_running && !m_thread_o_running) {
 		uv_close((uv_handle_t*) m_async, OnClose);
 	}
-}
-
-NAN_METHOD(Record::New) {
-	printf("[%ld]Record::New\n", GetCurrentThreadId());
-	Record* record = new Record(info);
-	record->Wrap(info.This());
-
-	info.GetReturnValue().Set(info.This());
-}
-
-NAN_METHOD(Record::Destroy) {	
-	printf("[%ld]Record::Destroy\n", GetCurrentThreadId());
-	Record* record = Nan::ObjectWrap::Unwrap<Record>(info.Holder());
-	record->Stop();
-
-	info.GetReturnValue().SetUndefined();
 }

@@ -1,12 +1,10 @@
 ﻿#ifndef _RECORD_H
 #define _RECORD_H
 
-#include <nan.h>
+#include <napi.h>
 #include <string>
 #include <vector>
 #include "audio_processor.h"
-
-using namespace v8;
 
 struct RecordEvent {
 	std::string type;
@@ -19,27 +17,26 @@ enum RecordFlag {
 	RF_ONLY_OUTPUT = 2,
 };
 
-class Record : public Nan::ObjectWrap {
+class Record : public Napi::ObjectWrap<Record> {
 	public:
-		static void Initialize(Local<Object> exports, Local<Value> module, Local<Context> context);
-		static Nan::Persistent<Function> constructor;
+		static Napi::Object Init(Napi::Env env, Napi::Object exports);
+		explicit Record(const Napi::CallbackInfo& info);
+		~Record();
 
 		void Stop();
+		void Destroy(const Napi::CallbackInfo& info);
 		void AddEvent(const RecordEvent&);
 		void HandleSend();
 		void Run(WaveSource ws);
 
 	private:
-		explicit Record(Nan::NAN_METHOD_ARGS_TYPE info);
-		~Record();
-
-		static NAN_METHOD(New);
-		static NAN_METHOD(Destroy);
+		static Napi::FunctionReference constructor;
+		
+		napi_env m_env;
+    	Napi::FunctionReference m_callback;
 
 		uv_mutex_t m_lock_events;
 		std::vector<RecordEvent> m_events;
-		Nan::Callback* m_event_callback;
-		Nan::AsyncResource* m_async_resource;
 		uv_async_t* m_async;
 		
 		volatile bool m_uv_closed;

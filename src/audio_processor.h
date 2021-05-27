@@ -2,7 +2,8 @@
 #define _AUDIO_PROCESS_H
 
 #include <vector>
-#include <nan.h>
+#include <napi.h>
+#include <uv.h>
 #include <Windows.h>
 #include "silk_encoder.h"
 

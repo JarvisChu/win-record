@@ -60,11 +60,11 @@ setTimeout(function () {
 }, 2000)
 ```
 
-# Build
+# Build && Test
 
 ```
-node-gyp configure
-node-gyp build
+yarn build
+yarn test
 ```
 
 # References

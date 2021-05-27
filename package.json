@@ -1,13 +1,24 @@
 {
   "name": "win-record",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "recording system input/output audio data for Windows",
   "main": "index.js",
   "repository": "https://github.com/JarvisChu/win-record.git",
   "author": "JarvisChu <jarvischu@126.com>",
   "license": "MIT",
+  "keywords": [
+    "winrecord",
+    "win-record",
+    "windows",
+    "recording"
+  ],
   "dependencies": {
-    "bindings": "^1.5.0",
-    "nan": "^2.14.2"
+    "bindings": "~1.2.1",
+    "node-addon-api": "^1.0.0"
+  },
+  "scripts": {
+    "build": "node-gyp configure build",
+    "rebuild": "node-gyp rebuild",
+    "test": "node test/test.js"
   }
 }
