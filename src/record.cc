@@ -135,12 +135,12 @@ Record::Record(const Napi::CallbackInfo& info): Napi::ObjectWrap<Record>(info) {
 	uv_async_init(uv_default_loop(), m_async, OnSend);
 
 	if(record_flag != RF_ONLY_OUTPUT){
-		m_ap_i.SetAudioParam(audio_format, sample_rate, sample_bits, channel);
+		m_ap_i.SetTgtAudioParam(audio_format, sample_rate, sample_bits, channel);
 		uv_thread_create(&m_record_thread_i, RunThreadI, this);
 	}
 
 	if(record_flag != RF_ONLY_INPUT){
-		m_ap_o.SetAudioParam(audio_format, sample_rate, sample_bits, channel);
+		m_ap_o.SetTgtAudioParam(audio_format, sample_rate, sample_bits, channel);
 		uv_thread_create(&m_record_thread_o, RunThreadO, this);
 	}  
 }
@@ -228,6 +228,12 @@ void Record::Run(WaveSource ws){
 	default:
 		//ShowOutput("Don't know how to coerce WAVEFORMATEX with wFormatTag = 0x%08x to int-16\n", pwfx->wFormatTag);
 		goto Exit;
+	}
+
+	if (ws == Wave_In) {
+		m_ap_i.SetOrgAudioParam(AF_PCM, pwfx->nSamplesPerSec, pwfx->wBitsPerSample, pwfx->nChannels);
+	}else{
+		m_ap_o.SetOrgAudioParam(AF_PCM, pwfx->nSamplesPerSec, pwfx->wBitsPerSample, pwfx->nChannels);
 	}
 
 	DWORD StreamFlags = 0;

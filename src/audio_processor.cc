@@ -23,7 +23,18 @@ AudioProcessor::AudioProcessor(){
 AudioProcessor::~AudioProcessor(){}
 
 
-void AudioProcessor::SetAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel)
+void AudioProcessor::SetOrgAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel)
+{
+	// origin audio format: only support PCM
+	m_org_sample_rate = sample_rate;
+	m_org_sample_bits = sample_bits;
+	m_org_channel = channel;
+
+	// update m_seg_instan
+	m_seg_instan = m_org_sample_rate * m_org_channel * m_org_sample_bits / 8 / m_tgt_sample_rate; // 除数放后，增加精度，用于降采样
+}
+
+void AudioProcessor::SetTgtAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel)
 {
 	m_tgt_audio_format = audio_format;
 	m_tgt_sample_rate = sample_rate;

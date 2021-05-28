@@ -22,7 +22,8 @@ class AudioProcessor{
 public:
 	AudioProcessor();
 	~AudioProcessor();
-	void SetAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel);
+	void SetOrgAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel); //audio_format: only support pcm
+	void SetTgtAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel);
 	void OnAudioData(BYTE *pData, size_t size);
 	void GetAudioData(std::vector<BYTE> &bufferOut);
 
