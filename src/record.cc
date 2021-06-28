@@ -31,8 +31,6 @@ const IID IID_IMMDeviceEnumerator = __uuidof(IMMDeviceEnumerator);
 const IID IID_IAudioClient = __uuidof(IAudioClient);
 const IID IID_IAudioCaptureClient = __uuidof(IAudioCaptureClient);
 
-Napi::FunctionReference Record::constructor;
-
 void OnSend(uv_async_t *async){
 	Record* record = (Record*) async->data;
 	record->HandleSend();
@@ -156,8 +154,10 @@ Napi::Object Record::Init(Napi::Env env, Napi::Object exports) {
 		InstanceMethod("destroy", &Record::Destroy)
 	});
 
-	constructor = Napi::Persistent(func);
-	constructor.SuppressDestruct();
+	Napi::FunctionReference* constructor = new Napi::FunctionReference();
+	*constructor = Napi::Persistent(func);
+	constructor->SuppressDestruct();
+
 	exports.Set("Record", func);
 	return exports;
 }

@@ -30,8 +30,6 @@ class Record : public Napi::ObjectWrap<Record> {
 		void Run(WaveSource ws);
 
 	private:
-		static Napi::FunctionReference constructor;
-		
 		napi_env m_env;
     	Napi::FunctionReference m_callback;
 
