@@ -332,7 +332,7 @@ void Record::Stop() {
 }
 
 void Record::AddEvent(const RecordEvent& evt){
-	printf("[%ld]Record::AddEvent, type:%s\n", GetCurrentThreadId(), evt.type.c_str());
+	//printf("[%ld]Record::AddEvent, type:%s\n", GetCurrentThreadId(), evt.type.c_str());
 	uv_mutex_lock(&m_lock_events);
 	m_events.push_back(evt);
 	uv_async_send(m_async);
@@ -340,7 +340,7 @@ void Record::AddEvent(const RecordEvent& evt){
 }
 
 void Record::HandleSend() {
-	printf("[%ld]Record::HandleSend\n", GetCurrentThreadId());	
+	//printf("[%ld]Record::HandleSend\n", GetCurrentThreadId());	
 	Napi::HandleScope scope(m_env);
 
 	std::vector<RecordEvent> events;
