@@ -176,8 +176,13 @@ void Record::Run(WaveSource ws){
 		this->AddEvent( RecordEvent{EVT_OUT_START, ""} );
 	}
 
-	CoInitializeEx(NULL, 0);
 	IMMDeviceEnumerator *pEnumerator = NULL;
+	IMMDevice *pDevice = NULL;
+	IAudioClient *pAudioClient = NULL;
+	WAVEFORMATEX *pwfx = NULL;
+	IAudioCaptureClient *pCaptureClient = NULL;
+
+	CoInitializeEx(NULL, 0);
 	HRESULT hr = CoCreateInstance(CLSID_MMDeviceEnumerator, NULL,CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&pEnumerator);
 	EXIT_ON_ERROR(hr);
 
@@ -186,15 +191,12 @@ void Record::Run(WaveSource ws){
 		device = eRender;
 	}
 	
-	IMMDevice *pDevice = NULL;
 	hr = pEnumerator->GetDefaultAudioEndpoint(device, eConsole, &pDevice);
 	EXIT_ON_ERROR(hr);
 
-	IAudioClient *pAudioClient = NULL;
 	hr = pDevice->Activate(IID_IAudioClient, CLSCTX_ALL, NULL, (void**)&pAudioClient);
 	EXIT_ON_ERROR(hr);
-
-	WAVEFORMATEX *pwfx = NULL;
+	
 	hr = pAudioClient->GetMixFormat(&pwfx);
 	EXIT_ON_ERROR(hr);
 
@@ -250,7 +252,6 @@ void Record::Run(WaveSource ws){
 	hr = pAudioClient->GetBufferSize(&bufferFrameCount);
 	EXIT_ON_ERROR(hr);
 
-	IAudioCaptureClient *pCaptureClient = NULL;
 	hr = pAudioClient->GetService(IID_IAudioCaptureClient,(void**)&pCaptureClient);
 	EXIT_ON_ERROR(hr);
 
@@ -310,7 +311,7 @@ void Record::Run(WaveSource ws){
 	EXIT_ON_ERROR(hr);
 
 	Exit:
-	CoTaskMemFree(pwfx);
+	if(pwfx) CoTaskMemFree(pwfx);
 	SAFE_RELEASE(pEnumerator)
 	SAFE_RELEASE(pDevice)
 	SAFE_RELEASE(pAudioClient)
