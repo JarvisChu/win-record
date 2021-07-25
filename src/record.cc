@@ -5,6 +5,7 @@
 #include <Windows.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
+#include <time.h>
 
 using namespace std;
 
@@ -55,6 +56,13 @@ void RunThreadO(void* arg) {
 	record->Run(Wave_Out);
 }
 
+std::string Record::GetCurrentTime(){
+	time_t t = time(NULL);
+	char ch[64] = { 0 };
+	strftime(ch, sizeof(ch) - 1, "%Y_%m_%d_%H_%M_%S", localtime(&t));
+	return std::string(ch);
+}
+
 Record::Record(const Napi::CallbackInfo& info): Napi::ObjectWrap<Record>(info) {
 	Napi::Env env = info.Env();
 
@@ -77,12 +85,38 @@ Record::Record(const Napi::CallbackInfo& info): Napi::ObjectWrap<Record>(info) {
   	int channel = info[4].As<Napi::Number>().Int32Value();
 
 	RecordFlag record_flag = RF_BOTH_IO;// 0 recording both io audio; 1 recording input audio only; 2 recording output audio only
-	if(info.Length() == 6 && info[5].IsString()) {
+	bool hasRecordFlag = false;
+	if(info.Length() >= 6 && info[5].IsString()) {
 		std::string flag = (std::string) info[5].ToString();
 		if(flag == "only_input") {
 			record_flag = RF_ONLY_INPUT;
+			hasRecordFlag = true;
 		}else if(flag == "only_output") {
 			record_flag = RF_ONLY_OUTPUT;
+			hasRecordFlag = true;
+		}
+	}
+
+	// record.start(audio_format, sample_rate, sample_bits, channel, record_flag, cache_dir, cache_key)
+	std::string cache_dir;
+	std::string cache_key;
+	if(hasRecordFlag){
+		if(info.Length() >= 7 && info[6].IsString()){
+			cache_dir = (std::string) info[6].ToString();
+			if(info.Length() >= 8 && info[7].IsString()){
+				cache_key = (std::string) info[7].ToString();
+			}
+		}
+	}
+
+	// record.start(audio_format, sample_rate, sample_bits, channel, cache_dir, cache_key)
+	// if cache_key set, it will be a part of the cached audio file's name.
+	else {
+		if(info.Length() >= 6 && info[5].IsString()){
+			cache_dir = (std::string) info[5].ToString();
+			if(info.Length() >= 7 && info[6].IsString()){
+				cache_key = (std::string) info[6].ToString();
+			}
 		}
 	}
 
@@ -117,6 +151,7 @@ Record::Record(const Napi::CallbackInfo& info): Napi::ObjectWrap<Record>(info) {
 	}
 
 	printf("Record::Record audio_format:%s, sample_rate:%d, sample_bit:%d, channel:%d \n", str_audio_format.c_str(), sample_rate, sample_bits, channel);
+	printf("Record::Record record_flag:%d, cache_dir:%s, cache_key:%s \n", record_flag, cache_dir.c_str(), cache_key.c_str());
 
 	m_env = callback.Env();
     m_callback = Napi::Persistent(callback);
@@ -132,13 +167,26 @@ Record::Record(const Napi::CallbackInfo& info): Napi::ObjectWrap<Record>(info) {
 	m_async->data = this;
 	uv_async_init(uv_default_loop(), m_async, OnSend);
 
+	// file save path prefix, e.g. C:/path/to/dir/audio_filename
+	std::string prefix;
+	if(cache_key.size() > 0){
+		prefix = cache_dir + "/" + GetCurrentTime();
+		if(cache_key.size() > 0) {
+			prefix += "_"+ cache_key;
+		}
+	}
+
 	if(record_flag != RF_ONLY_OUTPUT){
-		m_ap_i.SetTgtAudioParam(audio_format, sample_rate, sample_bits, channel);
+		std::string prefix_in;
+		if(prefix.size() > 0) prefix_in = prefix + "_in";
+		m_ap_i.SetTgtAudioParam(audio_format, sample_rate, sample_bits, channel, prefix_in);
 		uv_thread_create(&m_record_thread_i, RunThreadI, this);
 	}
 
 	if(record_flag != RF_ONLY_INPUT){
-		m_ap_o.SetTgtAudioParam(audio_format, sample_rate, sample_bits, channel);
+		std::string prefix_out;
+		if(prefix.size() > 0) prefix_out = prefix + "_out";
+		m_ap_o.SetTgtAudioParam(audio_format, sample_rate, sample_bits, channel, prefix_out);
 		uv_thread_create(&m_record_thread_o, RunThreadO, this);
 	}  
 }
@@ -328,6 +376,8 @@ void Record::Run(WaveSource ws){
 void Record::Stop() {
 	printf("[%ld]Record::Stop\n", GetCurrentThreadId());
 	if (!m_need_stop) {
+		m_ap_i.Stop();
+		m_ap_o.Stop();
 		m_need_stop = true;
 	}
 }
@@ -352,7 +402,7 @@ void Record::HandleSend() {
 
 	bool bInSended = false;
 	bool bOutSended = false;
-	for(int i=0; i < events.size(); i ++){
+	for(int i=0; i < (int)events.size(); i ++){
 
 		if(events[i].type == EVT_IN_AUDIO){
 			if( bInSended ) continue; // merge same events, trigger only once

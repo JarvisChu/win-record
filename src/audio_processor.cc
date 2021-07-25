@@ -20,8 +20,14 @@ AudioProcessor::AudioProcessor(){
 	uv_mutex_init(&m_lock_silk);
 }
 
-AudioProcessor::~AudioProcessor(){}
+AudioProcessor::~AudioProcessor(){
+	Stop();
+}
 
+void AudioProcessor::Stop(){
+	m_silk_file.Close();
+	m_wave_file.Close();
+}
 
 void AudioProcessor::SetOrgAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel)
 {
@@ -34,7 +40,7 @@ void AudioProcessor::SetOrgAudioParam(AudioFormat audio_format, int sample_rate,
 	m_seg_instan = m_org_sample_rate * m_org_channel * m_org_sample_bits / 8 / m_tgt_sample_rate; // 除数放后，增加精度，用于降采样
 }
 
-void AudioProcessor::SetTgtAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel)
+void AudioProcessor::SetTgtAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel, std::string prefix)
 {
 	m_tgt_audio_format = audio_format;
 	m_tgt_sample_rate = sample_rate;
@@ -43,6 +49,14 @@ void AudioProcessor::SetTgtAudioParam(AudioFormat audio_format, int sample_rate,
 
 	// update m_seg_instan
 	m_seg_instan = m_org_sample_rate * m_org_channel * m_org_sample_bits / 8 / m_tgt_sample_rate; // 除数放后，增加精度，用于降采样
+
+	m_prefix = prefix;
+	if(prefix.size() > 0){
+		m_silk_file.Close();
+		m_wave_file.Close();
+		m_silk_file.Open(prefix + ".silk");
+		m_wave_file.Open(prefix + ".wav", (uint32_t)sample_rate, (uint32_t)sample_bits, (uint16_t)channel);
+	}
 }
 
 void AudioProcessor::OnAudioData(BYTE *pData, size_t size){
@@ -61,8 +75,6 @@ void AudioProcessor::OnAudioData(BYTE *pData, size_t size){
 		size_t insterCount = size / m_seg_instan;
 		m_pcm.insert(m_pcm.end(), insterCount * m_tgt_channel * m_tgt_sample_bits / 8, 0);
 	}
-	
-	size_t pcmBufferCount = m_pcm.size();
 
 	//encode silk
 	if ( m_tgt_audio_format == AF_SILK){
@@ -70,8 +82,8 @@ void AudioProcessor::OnAudioData(BYTE *pData, size_t size){
 		int nBytesPer20ms = m_tgt_sample_rate * m_tgt_sample_bits * m_tgt_channel / 8 / 50; // bytes count of 20ms pcm audio data 
 		while ((int)m_pcm.size() > nBytesPer20ms) {
 			m_silk_encoder.Encode(m_tgt_sample_rate, 20, m_pcm, m_silk);
-			//if (m_bNeedSaveFile) m_waveFile.Write(m_buffer, nBytesPer20ms); // save pcm
-			m_pcm.erase(m_pcm.begin(), m_pcm.begin() + nBytesPer20ms);
+			m_pcm_cpy.insert(m_pcm_cpy.end(), m_pcm.begin(), m_pcm.begin() + nBytesPer20ms);
+			m_pcm.erase(m_pcm.begin(), m_pcm.begin() + nBytesPer20ms);	
 		}
 	}
 
@@ -83,11 +95,13 @@ void AudioProcessor::OnAudioData(BYTE *pData, size_t size){
 void AudioProcessor::GetAudioData(std::vector<BYTE> &bufferOut){
 	uv_mutex_lock(&m_lock_pcm);
 	if (m_tgt_audio_format == AF_SILK) {
-		//	if (m_bNeedSaveFile) m_silkFile.Write(m_silkBuffer, m_silkBuffer.size());
+		m_silk_file.Write(m_silk, m_silk.size());
+		m_wave_file.Write(m_pcm_cpy, m_pcm_cpy.size());
 		bufferOut.swap(m_silk);
 		m_silk.clear();
+		m_pcm_cpy.clear();
 	}else {
-		//if (m_bNeedSaveFile) m_waveFile.Write(m_buffer, m_buffer.size());
+		m_wave_file.Write(m_pcm, m_pcm.size());
 		bufferOut.swap(m_pcm);
 		m_pcm.clear();
 	}

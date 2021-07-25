@@ -51,8 +51,16 @@ r.on('error', function (msg) {
 })
 
 // start recording
-r.start('pcm', 8000, 16, 1); // audio_format (pcm/silk), sample_rate, sample_bit, channel
-//r.start('pcm', 8000, 16, 1, "only_input");// audio_format, sample_rate, sample_bit, channel, only_input/only_output
+//r.start(audio_format, 8000, 16, 1); // audio_format (pcm/silk), sample_rate, sample_bit, channel
+//r.start(audio_format, 8000, 16, 1, "only_output");// audio_format, sample_rate, sample_bit, channel, only_input/only_output
+
+// with audio file saving, e.g.
+// c:\\code\\github\\win-record\\test\\2021_07_25_20_25_17_mykey_in.silk
+// c:\\code\\github\\win-record\\test\\2021_07_25_20_25_17_mykey_out.silk
+// c:\\code\\github\\win-record\\test\\2021_07_25_20_25_17_mykey_in.wav
+// c:\\code\\github\\win-record\\test\\2021_07_25_20_25_17_mykey_out.wav
+r.start(audio_format, 8000, 16, 1, "c:\\code\\github\\win-record\\test", "mykey"); // audio_format, sample_rate, sample_bit, channel, cache_dir, cache_key
+//r.start(audio_format, 8000, 16, 1, "only_output", "c:\\code\\github\\win-record\\test", "mykey"); // audio_format, sample_rate, sample_bit, channel, only_input/only_output, cache_dir, cache_key
 
 setTimeout(function () {
   r.destroy()

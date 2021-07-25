@@ -2,10 +2,13 @@
 #define _AUDIO_PROCESS_H
 
 #include <vector>
+#include <string>
 #include <napi.h>
 #include <uv.h>
 #include <Windows.h>
 #include "silk_encoder.h"
+#include "silk_file.h"
+#include "wave_file.h"
 
 enum WaveSource
 {
@@ -23,9 +26,10 @@ public:
 	AudioProcessor();
 	~AudioProcessor();
 	void SetOrgAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel); //audio_format: only support pcm
-	void SetTgtAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel);
+	void SetTgtAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel, std::string prefix);
 	void OnAudioData(BYTE *pData, size_t size);
 	void GetAudioData(std::vector<BYTE> &bufferOut);
+	void Stop();
 
 private:
 	CSilkEncoder m_silk_encoder;
@@ -34,6 +38,7 @@ private:
 	uv_mutex_t m_lock_silk;
 
 	std::vector<BYTE> m_pcm;
+	std::vector<BYTE> m_pcm_cpy; // 用于silk格式时保存原始pcm
 	std::vector<BYTE> m_silk;
 	unsigned int m_offset;
 
@@ -47,6 +52,10 @@ private:
 	UINT m_tgt_channel;
 
 	UINT m_seg_instan;
+
+	CSilkFile m_silk_file;
+	CWaveFile m_wave_file;
+	std::string m_prefix;
 };
 
 #endif

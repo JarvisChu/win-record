@@ -28,6 +28,8 @@ class Record : public Napi::ObjectWrap<Record> {
 		void AddEvent(const RecordEvent&);
 		void HandleSend();
 		void Run(WaveSource ws);
+	private:
+		std::string GetCurrentTime();
 
 	private:
 		napi_env m_env;
