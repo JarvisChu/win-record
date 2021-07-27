@@ -82,7 +82,9 @@ void AudioProcessor::OnAudioData(BYTE *pData, size_t size){
 		int nBytesPer20ms = m_tgt_sample_rate * m_tgt_sample_bits * m_tgt_channel / 8 / 50; // bytes count of 20ms pcm audio data 
 		while ((int)m_pcm.size() > nBytesPer20ms) {
 			m_silk_encoder.Encode(m_tgt_sample_rate, 20, m_pcm, m_silk);
-			m_pcm_cpy.insert(m_pcm_cpy.end(), m_pcm.begin(), m_pcm.begin() + nBytesPer20ms);
+			if(m_prefix.size() > 0){
+				m_pcm_cpy.insert(m_pcm_cpy.end(), m_pcm.begin(), m_pcm.begin() + nBytesPer20ms);
+			}
 			m_pcm.erase(m_pcm.begin(), m_pcm.begin() + nBytesPer20ms);	
 		}
 	}
@@ -95,13 +97,18 @@ void AudioProcessor::OnAudioData(BYTE *pData, size_t size){
 void AudioProcessor::GetAudioData(std::vector<BYTE> &bufferOut){
 	uv_mutex_lock(&m_lock_pcm);
 	if (m_tgt_audio_format == AF_SILK) {
-		m_silk_file.Write(m_silk, m_silk.size());
-		m_wave_file.Write(m_pcm_cpy, m_pcm_cpy.size());
+		if(m_prefix.size() > 0){
+			m_silk_file.Write(m_silk, m_silk.size());
+			m_wave_file.Write(m_pcm_cpy, m_pcm_cpy.size());
+			m_pcm_cpy.clear();
+		}	
 		bufferOut.swap(m_silk);
 		m_silk.clear();
-		m_pcm_cpy.clear();
+		
 	}else {
-		m_wave_file.Write(m_pcm, m_pcm.size());
+		if(m_prefix.size() > 0){
+			m_wave_file.Write(m_pcm, m_pcm.size());
+		}
 		bufferOut.swap(m_pcm);
 		m_pcm.clear();
 	}

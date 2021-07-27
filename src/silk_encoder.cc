@@ -42,7 +42,7 @@ void CSilkEncoder::Encode(int sampleRate, int duration_ms, const std::vector<BYT
 	encControl.API_sampleRate = sampleRate;
 	encControl.maxInternalSampleRate = sampleRate;
 	encControl.packetSize = (duration_ms * sampleRate) / 1000;
-	encControl.complexity = 2;
+	encControl.complexity = 0;
 	encControl.packetLossPercentage = 0;
 	encControl.useInBandFEC = 0;
 	encControl.useDTX = 0;
