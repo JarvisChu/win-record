@@ -25,8 +25,10 @@ AudioProcessor::~AudioProcessor(){
 }
 
 void AudioProcessor::Stop(){
-	m_silk_file.Close();
-	m_wave_file.Close();
+	if(m_prefix.size() > 0){
+		m_silk_file.Close();
+		m_wave_file.Close();
+	}
 }
 
 void AudioProcessor::SetOrgAudioParam(AudioFormat audio_format, int sample_rate, int sample_bits, int channel)
@@ -101,10 +103,10 @@ void AudioProcessor::GetAudioData(std::vector<BYTE> &bufferOut){
 			m_silk_file.Write(m_silk, m_silk.size());
 			m_wave_file.Write(m_pcm_cpy, m_pcm_cpy.size());
 			m_pcm_cpy.clear();
-		}	
+		}
+
 		bufferOut.swap(m_silk);
-		m_silk.clear();
-		
+		m_silk.clear();	
 	}else {
 		if(m_prefix.size() > 0){
 			m_wave_file.Write(m_pcm, m_pcm.size());

@@ -41,13 +41,16 @@ class Record : public Napi::ObjectWrap<Record> {
 		
 		volatile bool m_uv_closed;
 		volatile bool m_need_stop;
-		volatile bool m_thread_i_running;
-		volatile bool m_thread_o_running;
+		volatile bool m_need_record_i;
+		volatile bool m_need_record_o;
 
 		uv_thread_t m_record_thread_i; // recording input device audio. Wave_In
 		uv_thread_t m_record_thread_o; // recording output device audio. Wave_Out
 		AudioProcessor m_ap_i;
 		AudioProcessor m_ap_o;
+
+		DWORD m_last_time_i;
+		DWORD m_last_time_o;
 };
 
 #endif

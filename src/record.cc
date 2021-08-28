@@ -6,6 +6,8 @@
 #include <audioclient.h>
 #include <mmdeviceapi.h>
 #include <time.h>
+#include <sstream>
+#include <excpt.h>
 
 using namespace std;
 
@@ -24,7 +26,24 @@ const char* EVT_ERROR = "error";
 #define REFTIMES_PER_SEC  10000000
 #define REFTIMES_PER_MILLISEC  10000
 
-#define EXIT_ON_ERROR(hres) { if (FAILED(hres)) { goto Exit; } }     
+#define EXIT_ON_ERROR(hres, msg) { \
+	if (FAILED(hres)) { \
+		bHasError = true; \
+		std::ostringstream stream; \
+		stream << ", hr=0x" << hex << hres; \
+		strErrMsg = msg + stream.str(); \
+		if(bCoInitializeExSucc && !bCrashed){ \
+			if(pwfx) CoTaskMemFree(pwfx); \
+			SAFE_RELEASE(pEnumerator) \
+			SAFE_RELEASE(pDevice) \
+			SAFE_RELEASE(pAudioClient) \
+			SAFE_RELEASE(pCaptureClient) \
+			CoUninitialize(); \
+		} \
+		goto Exit; \
+	} \
+}
+
 #define SAFE_RELEASE(punk) { if ((punk) != NULL) { (punk)->Release(); (punk) = NULL; } }
                 
 const CLSID CLSID_MMDeviceEnumerator = __uuidof(MMDeviceEnumerator);
@@ -158,8 +177,6 @@ Record::Record(const Napi::CallbackInfo& info): Napi::ObjectWrap<Record>(info) {
 
 	m_uv_closed = false;
 	m_need_stop = false;
-	m_thread_i_running = false;
-	m_thread_o_running = false;
 
 	uv_mutex_init(&m_lock_events);
 
@@ -176,19 +193,23 @@ Record::Record(const Napi::CallbackInfo& info): Napi::ObjectWrap<Record>(info) {
 		}
 	}
 
+	m_need_record_i = false;
 	if(record_flag != RF_ONLY_OUTPUT){
 		std::string prefix_in;
 		if(prefix.size() > 0) prefix_in = prefix + "_in";
 		m_ap_i.SetTgtAudioParam(audio_format, sample_rate, sample_bits, channel, prefix_in);
+		m_need_record_i = true;
 		uv_thread_create(&m_record_thread_i, RunThreadI, this);
 	}
 
+	m_need_record_o = false;
 	if(record_flag != RF_ONLY_INPUT){
 		std::string prefix_out;
 		if(prefix.size() > 0) prefix_out = prefix + "_out";
 		m_ap_o.SetTgtAudioParam(audio_format, sample_rate, sample_bits, channel, prefix_out);
+		m_need_record_o = true;
 		uv_thread_create(&m_record_thread_o, RunThreadO, this);
-	}  
+	}
 }
 
 Record::~Record() {
@@ -229,32 +250,44 @@ void Record::Run(WaveSource ws){
 	IAudioClient *pAudioClient = NULL;
 	WAVEFORMATEX *pwfx = NULL;
 	IAudioCaptureClient *pCaptureClient = NULL;
+	bool bHasError = false;
+	std::string strErrMsg;
+	bool bCoInitializeExSucc = false;
+	bool bCrashed = false;
+	int nRetryCnt = 0;
 
-	CoInitializeEx(NULL, 0);
-	HRESULT hr = CoCreateInstance(CLSID_MMDeviceEnumerator, NULL,CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&pEnumerator);
-	EXIT_ON_ERROR(hr);
+Recording:
 
-	EDataFlow device = eCapture;
-	if (ws == Wave_Out) {
-		device = eRender;
-	}
-	
-	hr = pEnumerator->GetDefaultAudioEndpoint(device, eConsole, &pDevice);
-	EXIT_ON_ERROR(hr);
+	HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+	EXIT_ON_ERROR(hr, "CoInitializeEx failed");
+	bCoInitializeExSucc = true;
 
-	hr = pDevice->Activate(IID_IAudioClient, CLSCTX_ALL, NULL, (void**)&pAudioClient);
-	EXIT_ON_ERROR(hr);
-	
-	hr = pAudioClient->GetMixFormat(&pwfx);
-	EXIT_ON_ERROR(hr);
+	__try{
+		hr = CoCreateInstance(CLSID_MMDeviceEnumerator, NULL,CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&pEnumerator);
+		EXIT_ON_ERROR(hr, "CoCreateInstance failed");
 
-	int nBlockAlign = 0;
-	// coerce int-XX wave format (like int-16 or int-32)
-	// can do this in-place since we're not changing the size of the format
-	// also, the engine will auto-convert from float to int for us
-	switch (pwfx->wFormatTag) {
-	case WAVE_FORMAT_EXTENSIBLE: // 65534
-	{
+		EDataFlow device = eCapture;
+		if (ws == Wave_Out) {
+			device = eRender;
+		}
+		
+		hr = pEnumerator->GetDefaultAudioEndpoint(device, eConsole, &pDevice);
+		EXIT_ON_ERROR(hr, "GetDefaultAudioEndpoint failed");
+
+		hr = pDevice->Activate(IID_IAudioClient, CLSCTX_ALL, NULL, (void**)&pAudioClient);
+		EXIT_ON_ERROR(hr, "Activate failed");
+		
+		hr = pAudioClient->GetMixFormat(&pwfx);
+		EXIT_ON_ERROR(hr, "GetMixFormat failed");
+
+		int nBlockAlign = 0;
+		// coerce int-XX wave format (like int-16 or int-32)
+		// can do this in-place since we're not changing the size of the format
+		// also, the engine will auto-convert from float to int for us
+		if(pwfx->wFormatTag != WAVE_FORMAT_EXTENSIBLE){
+			EXIT_ON_ERROR(E_UNEXPECTED, "Unsupported Wave format");
+		}
+
 		// naked scope for case-local variable
 		PWAVEFORMATEXTENSIBLE pEx = reinterpret_cast<PWAVEFORMATEXTENSIBLE>(pwfx);
 		if (IsEqualGUID(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, pEx->SubFormat)) {
@@ -269,107 +302,128 @@ void Record::Run(WaveSource ws){
 			pwfx->nAvgBytesPerSec = pwfx->nBlockAlign * pwfx->nSamplesPerSec;
 			nBlockAlign = pwfx->nBlockAlign;
 			// see also setupPwfex method
+		}else {
+			EXIT_ON_ERROR(E_UNEXPECTED, "Invalid Wave format");
 		}
-		else {
-			goto Exit;
+
+		if (ws == Wave_In) {
+			m_ap_i.SetOrgAudioParam(AF_PCM, pwfx->nSamplesPerSec, pwfx->wBitsPerSample, pwfx->nChannels);
+		}else{
+			m_ap_o.SetOrgAudioParam(AF_PCM, pwfx->nSamplesPerSec, pwfx->wBitsPerSample, pwfx->nChannels);
 		}
-	}
-	break;
-	default:
-		//ShowOutput("Don't know how to coerce WAVEFORMATEX with wFormatTag = 0x%08x to int-16\n", pwfx->wFormatTag);
-		goto Exit;
-	}
 
-	if (ws == Wave_In) {
-		m_ap_i.SetOrgAudioParam(AF_PCM, pwfx->nSamplesPerSec, pwfx->wBitsPerSample, pwfx->nChannels);
-	}else{
-		m_ap_o.SetOrgAudioParam(AF_PCM, pwfx->nSamplesPerSec, pwfx->wBitsPerSample, pwfx->nChannels);
-	}
+		DWORD StreamFlags = 0;
+		if (ws == Wave_Out) {
+			StreamFlags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
+		}
 
-	DWORD StreamFlags = 0;
-	if (ws == Wave_Out) {
-		StreamFlags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
-	}
+		REFERENCE_TIME hnsRequestedDuration = REFTIMES_PER_SEC;
+		hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,StreamFlags,hnsRequestedDuration,0,pwfx,NULL);
+		EXIT_ON_ERROR(hr, "AudioClient Initialize failed");
 
-	REFERENCE_TIME hnsRequestedDuration = REFTIMES_PER_SEC;
-	hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,StreamFlags,hnsRequestedDuration,0,pwfx,NULL);
-	EXIT_ON_ERROR(hr);
+		// Get the size of the allocated buffer.
+		UINT32 bufferFrameCount;
+		hr = pAudioClient->GetBufferSize(&bufferFrameCount);
+		EXIT_ON_ERROR(hr, "AudioClient GetBufferSize failed");
 
-	// Get the size of the allocated buffer.
-	UINT32 bufferFrameCount;
-	hr = pAudioClient->GetBufferSize(&bufferFrameCount);
-	EXIT_ON_ERROR(hr);
+		hr = pAudioClient->GetService(IID_IAudioCaptureClient,(void**)&pCaptureClient);
+		EXIT_ON_ERROR(hr, "AudioClient GetService failed");
 
-	hr = pAudioClient->GetService(IID_IAudioCaptureClient,(void**)&pCaptureClient);
-	EXIT_ON_ERROR(hr);
 
-	// Notify the audio sink which format to use.
-	//hr = pMySink->SetFormat(pwfx);
-	//EXIT_ON_ERROR(hr)
+		// Calculate the actual duration of the allocated buffer.
+		REFERENCE_TIME hnsActualDuration = (double)REFTIMES_PER_SEC * bufferFrameCount / pwfx->nSamplesPerSec;
 
-	// Calculate the actual duration of the allocated buffer.
-	REFERENCE_TIME hnsActualDuration = (double)REFTIMES_PER_SEC * bufferFrameCount / pwfx->nSamplesPerSec;
+		hr = pAudioClient->Start();  // Start recording.
+		EXIT_ON_ERROR(hr, "AudioClient Start failed");
 
-	hr = pAudioClient->Start();  // Start recording.
-	EXIT_ON_ERROR(hr);
-
-	// Each loop fills about half of the shared buffer.
-	while (!m_need_stop)
-	{
-		// Sleep for half the buffer duration.
-		Sleep(hnsActualDuration / REFTIMES_PER_MILLISEC / 2);
-
-		UINT32 packetLength = 0;
-		hr = pCaptureClient->GetNextPacketSize(&packetLength);
-		EXIT_ON_ERROR(hr);
-
-		while (!m_need_stop && packetLength != 0)
+		// Each loop fills about half of the shared buffer.
+		while (!m_need_stop)
 		{
-			// Get the available data in the shared buffer.
-			BYTE *pData;
-			DWORD flags;
-			UINT32 numFramesAvailable;
-			hr = pCaptureClient->GetBuffer(&pData,&numFramesAvailable,&flags, NULL, NULL);
-			EXIT_ON_ERROR(hr);
+			// Sleep for half the buffer duration.
+			Sleep(hnsActualDuration / REFTIMES_PER_MILLISEC / 2);
 
-			if (flags & AUDCLNT_BUFFERFLAGS_SILENT){
-				pData = NULL;  // Tell CopyData to write silence.
-			}
-
-			// Copy the available capture data to the audio sink.
-			if(ws == Wave_In){
-				m_ap_i.OnAudioData(pData, nBlockAlign *numFramesAvailable);
-				this->AddEvent(RecordEvent{EVT_IN_AUDIO,"" });
-			}else if(ws == Wave_Out){
-				m_ap_o.OnAudioData(pData, nBlockAlign *numFramesAvailable);
-				this->AddEvent(RecordEvent{EVT_OUT_AUDIO, ""});
-			}
-
-			EXIT_ON_ERROR(hr);
-
-			hr = pCaptureClient->ReleaseBuffer(numFramesAvailable);
-			EXIT_ON_ERROR(hr);
-
+			UINT32 packetLength = 0;
 			hr = pCaptureClient->GetNextPacketSize(&packetLength);
-			EXIT_ON_ERROR(hr);
+			EXIT_ON_ERROR(hr, "GetNextPacketSize failed");
+
+			while (!m_need_stop && packetLength != 0)
+			{
+				// Get the available data in the shared buffer.
+				BYTE *pData;
+				DWORD flags;
+				UINT32 numFramesAvailable;
+				hr = pCaptureClient->GetBuffer(&pData,&numFramesAvailable,&flags, NULL, NULL);
+				EXIT_ON_ERROR(hr, "GetBuffer failed");
+
+				if (flags & AUDCLNT_BUFFERFLAGS_SILENT){
+					pData = NULL;  // Tell CopyData to write silence.
+				}
+
+				// Copy the available capture data to the audio sink.
+				DWORD now = ::GetTickCount();
+				if(ws == Wave_In){
+					m_ap_i.OnAudioData(pData, nBlockAlign *numFramesAvailable);
+					if( now - m_last_time_i > 200 ){
+						this->AddEvent(RecordEvent{EVT_IN_AUDIO,"" });
+						m_last_time_i = now;
+					}	
+				}else if(ws == Wave_Out){
+					m_ap_o.OnAudioData(pData, nBlockAlign *numFramesAvailable);
+					if( now - m_last_time_o > 200 ){
+						this->AddEvent(RecordEvent{EVT_OUT_AUDIO, ""});
+						m_last_time_o = now;
+					}	
+				}
+
+				hr = pCaptureClient->ReleaseBuffer(numFramesAvailable);
+				EXIT_ON_ERROR(hr, "ReleaseBuffer failed");
+
+				hr = pCaptureClient->GetNextPacketSize(&packetLength);
+				EXIT_ON_ERROR(hr, "GetNextPacketSize1 failed");
+			}
+		}
+
+		hr = pAudioClient->Stop();  // Stop recording.
+		EXIT_ON_ERROR(hr, "AudioClient Stop failed");
+
+		if(bCoInitializeExSucc){
+			if(pwfx) CoTaskMemFree(pwfx);
+			SAFE_RELEASE(pEnumerator)
+			SAFE_RELEASE(pDevice)
+			SAFE_RELEASE(pAudioClient)
+			SAFE_RELEASE(pCaptureClient)
+			CoUninitialize();
 		}
 	}
 
-	hr = pAudioClient->Stop();  // Stop recording.
-	EXIT_ON_ERROR(hr);
+	__except(EXCEPTION_EXECUTE_HANDLER ){
+		bCrashed = true;
+		std::ostringstream stream;
+		stream << "crashed, exception code = 0x" << hex << GetExceptionCode();
+		strErrMsg = stream.str();
+	}
 
-	Exit:
-	if(pwfx) CoTaskMemFree(pwfx);
-	SAFE_RELEASE(pEnumerator)
-	SAFE_RELEASE(pDevice)
-	SAFE_RELEASE(pAudioClient)
-	SAFE_RELEASE(pCaptureClient)
-	CoUninitialize();
+Exit:
+	if(bHasError || bCrashed){
+		if(nRetryCnt < 3){
+			nRetryCnt ++;
 
-	if(ws == Wave_In) {
-		this->AddEvent( RecordEvent{EVT_IN_STOP, ""} );
-	}else{
-		this->AddEvent( RecordEvent{EVT_OUT_STOP, ""} );
+			bHasError = false;
+			bCrashed = false;
+			bCoInitializeExSucc = false;
+			pEnumerator = NULL;
+			pDevice = NULL;
+			pAudioClient = NULL;
+			pwfx = NULL;
+			pCaptureClient = NULL;
+
+			Sleep(100);
+
+			printf("retry: %d\n", nRetryCnt);
+			goto Recording;
+		}
+
+		this->AddEvent( RecordEvent{EVT_ERROR, strErrMsg} );
 	}
 }
 
@@ -379,6 +433,14 @@ void Record::Stop() {
 		m_ap_i.Stop();
 		m_ap_o.Stop();
 		m_need_stop = true;
+
+    	if(m_need_record_i) uv_thread_join(&m_record_thread_i);
+    	if(m_need_record_o) uv_thread_join(&m_record_thread_o);
+
+    	if(m_need_record_i) m_callback.Call({Napi::String::New(m_env, EVT_IN_STOP), Napi::String::New(m_env, "")});
+    	if(m_need_record_o) m_callback.Call({Napi::String::New(m_env, EVT_OUT_STOP), Napi::String::New(m_env, "")});
+
+    	uv_close((uv_handle_t *)m_async, OnClose);
 	}
 }
 
@@ -391,7 +453,11 @@ void Record::AddEvent(const RecordEvent& evt){
 }
 
 void Record::HandleSend() {
-	//printf("[%ld]Record::HandleSend\n", GetCurrentThreadId());	
+	//printf("[%ld]Record::HandleSend\n", GetCurrentThreadId());
+	if(m_need_stop){
+		return;
+	}
+
 	Napi::HandleScope scope(m_env);
 
 	std::vector<RecordEvent> events;
@@ -433,25 +499,10 @@ void Record::HandleSend() {
 		}
 
 		else{
-			// update flag
-			if (events[i].type == EVT_IN_START){
-				m_thread_i_running = true;
-			}else if (events[i].type == EVT_OUT_START){
-				m_thread_o_running = true;
-			}else if (events[i].type == EVT_IN_STOP){
-				m_thread_i_running = false;
-			}else if (events[i].type == EVT_OUT_STOP){
-				m_thread_o_running = false;
-			}
-
 			m_callback.Call({
 				Napi::String::New(m_env, events[i].type), 
 				Napi::String::New(m_env, events[i].value)
 			});
 		}
-	}
-
-	if(m_need_stop && !m_thread_i_running && !m_thread_o_running) {
-		uv_close((uv_handle_t*) m_async, OnClose);
 	}
 }

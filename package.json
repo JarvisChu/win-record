@@ -1,6 +1,6 @@
 {
   "name": "win-record",
-  "version": "0.0.15",
+  "version": "0.0.19",
   "description": "recording system input/output audio data for Windows",
   "main": "index.js",
   "repository": "https://github.com/JarvisChu/win-record.git",

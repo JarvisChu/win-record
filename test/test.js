@@ -2,12 +2,18 @@ var record = require('../')
 var fs = require('fs');
 
 var r = record()
-var audio_format = 'silk'  // pcm / silk
-var save_in_js = true
+var audio_format = 'pcm'  // pcm / silk
+var save_in_js = false
+
+function getNow(){
+  d = new Date()
+  return d.toLocaleTimeString() + ": " + d.getMilliseconds()
+}
 
 // recording system input audio (microphone) started
 r.on('in_start', function () {
-  console.log('in_start')
+  d = new Date()
+  console.log(getNow(), 'in_start')
 
   if(save_in_js){
     if(audio_format == 'pcm'){
@@ -28,7 +34,7 @@ r.on('in_start', function () {
 
 // recording system output audio (speaker) started
 r.on('out_start', function () {
-  console.log('out_start')
+  console.log(getNow(), 'out_start')
 
   if(save_in_js){
     if(audio_format == 'pcm'){
@@ -48,16 +54,16 @@ r.on('out_start', function () {
 })
 
 r.on('in_stop', function () {
-  console.log('in_stop')
+  console.log(getNow(), 'in_stop')
 })
 
 r.on('out_stop', function () {
-  console.log('out_stop')
+  console.log(getNow(), 'out_stop')
 })
 
 // system input audio (microphone) data
 r.on('in_audio', function (data) {
-  //console.log('in_audio: ', typeof 'data')
+  console.log(getNow(), 'in_audio: ', data.length)
 
   if(save_in_js){
     var filename;
@@ -73,7 +79,7 @@ r.on('in_audio', function (data) {
 
 // system output audio (microphone) data
 r.on('out_audio', function (data) {
-  //console.log('out_audio: ', typeof 'data')
+  console.log(getNow(), 'out_audio: ', data.length)
 
   if(save_in_js){
     var filename;
@@ -106,4 +112,4 @@ r.start(audio_format, 8000, 16, 1, "c:\\code\\github\\win-record\\test", "mykey"
 setTimeout(function () {
   r.destroy()
   console.log('destroy')
-}, 10000)
+}, 5000)
