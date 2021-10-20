@@ -22,7 +22,6 @@ private:
 	void InitHeader();
 
 private:
-	std::string m_path;
 	FILE* m_fp = nullptr;
 };
 

@@ -54,7 +54,6 @@ private:
 
 private:
 	WaveHeader m_header;
-	std::string m_path;
 	FILE* m_fp = nullptr;
 	uint32_t m_len = 0;
 };
